@@ -12,27 +12,51 @@ AWS_ACCESS_KEY_ID ?= test
 AWS_SECRET_ACCESS_KEY ?= test
 JEMLIH_AWS_ENDPOINT ?= http://localhost:$(FLOCI_PORT)
 FLEET_TABLE ?= jemlih-fleet
-export FLOCI_PORT AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY JEMLIH_AWS_ENDPOINT FLEET_TABLE
+RENTAL_ID ?= default
+export FLOCI_PORT AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY JEMLIH_AWS_ENDPOINT FLEET_TABLE RENTAL_ID
 
-TOFU_VARS := -var aws_endpoint=$(JEMLIH_AWS_ENDPOINT) -var region=$(AWS_REGION) -var fleet_table=$(FLEET_TABLE)
+TOFU_VARS := -var aws_endpoint=$(JEMLIH_AWS_ENDPOINT) -var region=$(AWS_REGION) \
+	-var fleet_table=$(FLEET_TABLE) -var rental_id=$(RENTAL_ID)
 
-.PHONY: help up down test vet fmt
+# Exports the user pool created by OpenTofu; tokens always name floci as their issuer.
+POOL_ENV = export COGNITO_USER_POOL_ID="$$($(TOFU) output -raw user_pool_id)" \
+	COGNITO_CLIENT_ID="$$($(TOFU) output -raw web_client_id)" && \
+	export COGNITO_ISSUER="http://floci:4566/$$COGNITO_USER_POOL_ID" \
+	COGNITO_JWKS_URL="$(JEMLIH_AWS_ENDPOINT)/$$COGNITO_USER_POOL_ID/.well-known/jwks.json"
+
+LAMBDAS := account-postconfirm
+
+.PHONY: help up down test vet fmt lambdas seed-owner
 
 help: ## List available commands
-	@grep -E '^[a-z-]+:.*## ' $(firstword $(MAKEFILE_LIST)) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-8s %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*## ' $(firstword $(MAKEFILE_LIST)) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-11s %s\n", $$1, $$2}'
 
-up: ## Start the emulator, apply infrastructure and start the services
+up: lambdas ## Start the emulator, apply infrastructure and start the services
 	docker compose up -d --wait floci
 	$(TOFU) init -input=false -no-color > /dev/null
 	$(TOFU) apply -input=false -auto-approve $(TOFU_VARS)
-	docker compose up -d --build --wait fleet
+	$(POOL_ENV) && docker compose up -d --build --wait fleet account
 
 down: ## Stop everything and delete emulator data and local infrastructure state
 	docker compose down --volumes --remove-orphans
+	@# Lambda containers are started by the emulator, outside compose
+	docker ps -aq --filter name=floci-aws- | xargs -r docker rm -f > /dev/null
 	rm -f infra/local/terraform.tfstate infra/local/terraform.tfstate.backup
 
-test: ## Run the test suite against the running emulator (run `make up` first)
-	go test ./... -count=1
+test: ## Run the test suite against the running environment (run `make up` first)
+	$(POOL_ENV) && go test ./... -count=1
+
+seed-owner: ## Create the first Owner: make seed-owner EMAIL=you@example.com PASSWORD=...
+	$(POOL_ENV) && go run ./services/account/cmd/seed -email "$(or $(EMAIL),owner@jemlih.local)" -password "$(PASSWORD)"
+
+lambdas: ## Build the Lambda packages into build/
+	@mkdir -p build
+	@for fn in $(LAMBDAS); do \
+		svc=$${fn%%-*}; cmd=$${fn#*-}; \
+		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -tags lambda.norpc \
+			-o build/$$fn/bootstrap ./services/$$svc/cmd/$$cmd && \
+		(cd build/$$fn && rm -f ../$$fn.zip && zip -q -X ../$$fn.zip bootstrap) || exit 1; \
+	done
 
 vet: ## Run static checks
 	go vet ./...

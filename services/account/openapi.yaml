@@ -1,0 +1,201 @@
+openapi: 3.1.0
+info:
+  title: Jemlih Account API
+  version: 0.1.0
+  description: The caller's identity and the Rental's back-office accounts. The Rental is always the caller's, taken from the ID token.
+security:
+  - idToken: []
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: The service is running.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+  /me:
+    get:
+      operationId: getMe
+      summary: Describe the signed-in caller (any role)
+      responses:
+        "200":
+          description: The caller's identity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /staff:
+    get:
+      operationId: listStaff
+      summary: List the Rental's Staff accounts (Owner only)
+      responses:
+        "200":
+          description: All Staff of the Rental.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaffList"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      operationId: createStaff
+      summary: Create a Staff account (Owner only)
+      description: The response carries a temporary password, shown only once; Staff must replace it at first sign-in.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewStaff"
+      responses:
+        "201":
+          description: The Staff account was created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatedStaff"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: An account with this email already exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          $ref: "#/components/responses/InternalError"
+components:
+  securitySchemes:
+    idToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Cognito ID token issued to the web app client.
+  schemas:
+    Role:
+      type: string
+      enum: [owner, staff, renter]
+    Me:
+      type: object
+      required: [id, email, role, rental_id]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        role:
+          $ref: "#/components/schemas/Role"
+        rental_id:
+          type: string
+    NewStaff:
+      type: object
+      additionalProperties: false
+      required: [email, name]
+      properties:
+        email:
+          type: string
+          format: email
+          description: Stored in lower case; becomes the sign-in username.
+        name:
+          type: string
+          maxLength: 100
+    Member:
+      type: object
+      required: [id, email, name, status, created_at]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          description: Cognito user status, for example FORCE_CHANGE_PASSWORD or CONFIRMED.
+        created_at:
+          type: string
+          format: date-time
+    CreatedStaff:
+      allOf:
+        - $ref: "#/components/schemas/Member"
+        - type: object
+          required: [temporary_password]
+          properties:
+            temporary_password:
+              type: string
+    StaffList:
+      type: object
+      required: [staff]
+      properties:
+        staff:
+          type: array
+          items:
+            $ref: "#/components/schemas/Member"
+    ErrorBody:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              examples: [validation_failed, invalid_body, email_taken, unauthenticated, forbidden, internal]
+            message:
+              type: string
+            fields:
+              type: object
+              additionalProperties:
+                type: string
+  responses:
+    Unauthenticated:
+      description: The ID token is missing, invalid, expired or issued to another client.
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+    Forbidden:
+      description: The caller's role may not perform this action, or the account has no role.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+    BadRequest:
+      description: The body is malformed or some fields are invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+    InternalError:
+      description: Unexpected failure; details are logged, not returned.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"

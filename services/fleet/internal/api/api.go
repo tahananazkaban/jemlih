@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/tahananazkaban/jemlih/pkg/auth"
 	"github.com/tahananazkaban/jemlih/pkg/httpx"
 	"github.com/tahananazkaban/jemlih/services/fleet/internal/domain"
 )
@@ -18,21 +19,24 @@ type UnitStore interface {
 	List(ctx context.Context, rentalID string) ([]domain.Unit, error)
 }
 
-// Handler serves the fleet endpoints for a single Rental.
+// Handler serves the fleet endpoints; the Rental always comes from the caller's token.
 type Handler struct {
-	Units    UnitStore
-	RentalID string
-	Now      func() time.Time
-	NewID    func() string
+	Units UnitStore
+	Auth  *auth.Verifier
+	Now   func() time.Time
+	NewID func() string
 }
 
 // Routes returns the HTTP routes of the fleet service.
 func (h *Handler) Routes() http.Handler {
+	anyRole := h.Auth.Require(auth.Owner, auth.Staff, auth.Renter)
+	ownerOnly := h.Auth.Require(auth.Owner)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", h.health)
-	mux.HandleFunc("POST /units", h.createUnit)
-	mux.HandleFunc("GET /units", h.listUnits)
-	mux.HandleFunc("GET /units/{id}", h.getUnit)
+	mux.Handle("POST /units", ownerOnly(h.createUnit))
+	mux.Handle("GET /units", anyRole(h.listUnits))
+	mux.Handle("GET /units/{id}", anyRole(h.getUnit))
 	return mux
 }
 
@@ -115,7 +119,7 @@ func (h *Handler) createUnit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = h.Units.Create(r.Context(), h.RentalID, unit)
+	err = h.Units.Create(r.Context(), auth.MustFromContext(r.Context()).RentalID, unit)
 	if errors.Is(err, domain.ErrDuplicatePlate) {
 		httpx.WriteError(w, http.StatusConflict, httpx.Error{Code: "duplicate_plate", Message: "a unit with this plate number already exists"})
 		return
@@ -129,7 +133,7 @@ func (h *Handler) createUnit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listUnits(w http.ResponseWriter, r *http.Request) {
-	units, err := h.Units.List(r.Context(), h.RentalID)
+	units, err := h.Units.List(r.Context(), auth.MustFromContext(r.Context()).RentalID)
 	if err != nil {
 		httpx.InternalError(w, r, err)
 		return
@@ -142,7 +146,7 @@ func (h *Handler) listUnits(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getUnit(w http.ResponseWriter, r *http.Request) {
-	unit, err := h.Units.Get(r.Context(), h.RentalID, r.PathValue("id"))
+	unit, err := h.Units.Get(r.Context(), auth.MustFromContext(r.Context()).RentalID, r.PathValue("id"))
 	if errors.Is(err, domain.ErrNotFound) {
 		httpx.WriteError(w, http.StatusNotFound, httpx.Error{Code: "not_found", Message: "unit not found"})
 		return

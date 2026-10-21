@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tahananazkaban/jemlih/pkg/auth"
 	"github.com/tahananazkaban/jemlih/pkg/env"
 	"github.com/tahananazkaban/jemlih/pkg/testkit"
 	"github.com/tahananazkaban/jemlih/services/fleet/internal/app"
@@ -23,18 +24,25 @@ type unit struct {
 	CreatedAt       string `json:"created_at"`
 }
 
-// startFleet runs the real fleet service for a fresh Rental against the emulator.
-func startFleet(t *testing.T, rentalID string) *testkit.Client {
+// serveFleet runs the real fleet service against the emulator, with no credentials attached.
+func serveFleet(t *testing.T, pool *testkit.Pool) *testkit.Client {
 	t.Helper()
 	handler, err := app.New(app.Config{
 		AWS:       testkit.AWSConfig(t),
+		Auth:      pool.Auth,
 		UnitTable: env.String("FLEET_TABLE", "jemlih-fleet"),
-		RentalID:  rentalID,
 	})
 	if err != nil {
 		t.Fatalf("start fleet: %v", err)
 	}
 	return testkit.Serve(t, handler)
+}
+
+// startFleet returns a fleet client signed in as an Owner of rentalID.
+func startFleet(t *testing.T, rentalID string) *testkit.Client {
+	t.Helper()
+	pool := testkit.UserPool(t)
+	return serveFleet(t, pool).As(pool.NewUser(rentalID, auth.Owner).IDToken)
 }
 
 func validUnit() map[string]any {
@@ -220,4 +228,71 @@ func TestUnitsOfAnotherRentalAreNotVisible(t *testing.T) {
 	var u unit
 	owner.Do(http.MethodPost, "/units", validUnit()).Expect(http.StatusCreated).Decode(&u)
 	stranger.Do(http.MethodGet, "/units/"+u.ID, nil).Expect(http.StatusNotFound)
+}
+
+func TestUnitEndpointsRequireAValidToken(t *testing.T) {
+	fleet := serveFleet(t, testkit.UserPool(t))
+
+	for _, token := range []string{"", "not-a-jwt", "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln"} {
+		for _, req := range []struct{ method, path string }{
+			{http.MethodGet, "/units"},
+			{http.MethodGet, "/units/any"},
+			{http.MethodPost, "/units"},
+		} {
+			var e testkit.ErrorBody
+			fleet.As(token).Do(req.method, req.path, validUnit()).Expect(http.StatusUnauthorized).Decode(&e)
+			if e.Error.Code != "unauthenticated" {
+				t.Errorf("%s %s with %q: code = %q, want unauthenticated", req.method, req.path, token, e.Error.Code)
+			}
+		}
+	}
+}
+
+func TestOnlyOwnersCreateUnits(t *testing.T) {
+	pool := testkit.UserPool(t)
+	fleet := serveFleet(t, pool)
+	rentalID := testkit.NewRentalID()
+
+	for _, role := range []auth.Role{auth.Staff, auth.Renter} {
+		t.Run(string(role), func(t *testing.T) {
+			var e testkit.ErrorBody
+			fleet.As(pool.NewUser(rentalID, role).IDToken).
+				Do(http.MethodPost, "/units", validUnit()).Expect(http.StatusForbidden).Decode(&e)
+			if e.Error.Code != "forbidden" {
+				t.Errorf("code = %q, want forbidden", e.Error.Code)
+			}
+		})
+	}
+}
+
+func TestEveryRoleReadsTheRentalsUnits(t *testing.T) {
+	pool := testkit.UserPool(t)
+	fleet := serveFleet(t, pool)
+	rentalID := testkit.NewRentalID()
+
+	var created unit
+	fleet.As(pool.NewUser(rentalID, auth.Owner).IDToken).
+		Do(http.MethodPost, "/units", validUnit()).Expect(http.StatusCreated).Decode(&created)
+
+	for _, role := range []auth.Role{auth.Staff, auth.Renter} {
+		t.Run(string(role), func(t *testing.T) {
+			reader := fleet.As(pool.NewUser(rentalID, role).IDToken)
+			var list struct {
+				Units []unit `json:"units"`
+			}
+			reader.Do(http.MethodGet, "/units", nil).Expect(http.StatusOK).Decode(&list)
+			if len(list.Units) != 1 || list.Units[0].ID != created.ID {
+				t.Errorf("units = %+v, want only %s", list.Units, created.ID)
+			}
+			reader.Do(http.MethodGet, "/units/"+created.ID, nil).Expect(http.StatusOK)
+		})
+	}
+}
+
+func TestAccountWithoutRoleIsForbidden(t *testing.T) {
+	pool := testkit.UserPool(t)
+	fleet := serveFleet(t, pool)
+
+	fleet.As(pool.NewUser(testkit.NewRentalID(), "").IDToken).
+		Do(http.MethodGet, "/units", nil).Expect(http.StatusForbidden)
 }

@@ -9,7 +9,11 @@ provider "aws" {
   skip_requesting_account_id  = true
 
   endpoints {
-    dynamodb = var.aws_endpoint
+    cognitoidp = var.aws_endpoint
+    dynamodb   = var.aws_endpoint
+    iam        = var.aws_endpoint
+    lambda     = var.aws_endpoint
+    sts        = var.aws_endpoint
   }
 
   default_tags {

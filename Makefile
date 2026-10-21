@@ -46,8 +46,8 @@ down: ## Stop everything and delete emulator data and local infrastructure state
 test: ## Run the test suite against the running environment (run `make up` first)
 	$(POOL_ENV) && go test ./... -count=1
 
-seed-owner: ## Create the first Owner: make seed-owner EMAIL=you@example.com PASSWORD=...
-	$(POOL_ENV) && go run ./services/account/cmd/seed -email "$(or $(EMAIL),owner@jemlih.local)" -password "$(PASSWORD)"
+seed-owner: ## Create the first Owner: make seed-owner EMAIL=you@example.com [PASSWORD=...]
+	@$(POOL_ENV) && SEED_OWNER_PASSWORD='$(PASSWORD)' go run ./services/account/cmd/seed -email "$(or $(EMAIL),owner@jemlih.local)"
 
 lambdas: ## Build the Lambda packages into build/
 	@mkdir -p build

@@ -112,15 +112,9 @@ func (v *Verifier) Verify(ctx context.Context, token string) (Identity, error) {
 
 type contextKey struct{}
 
-// FromContext returns the Identity stored by Require.
-func FromContext(ctx context.Context) (Identity, bool) {
-	id, ok := ctx.Value(contextKey{}).(Identity)
-	return id, ok
-}
-
-// MustFromContext is for handlers wrapped by Require, where the Identity always exists.
+// MustFromContext returns the caller stored by Require; handlers outside Require must not call it.
 func MustFromContext(ctx context.Context) Identity {
-	id, ok := FromContext(ctx)
+	id, ok := ctx.Value(contextKey{}).(Identity)
 	if !ok {
 		panic("auth: handler is not wrapped by Require")
 	}
@@ -140,9 +134,6 @@ func (v *Verifier) Require(roles ...Role) func(http.HandlerFunc) http.Handler {
 			switch {
 			case errors.Is(err, errNoRole):
 				httpx.WriteError(w, http.StatusForbidden, httpx.Error{Code: "forbidden", Message: "account has no role in a rental"})
-				return
-			case errors.Is(err, errKeySetUnavailable):
-				httpx.InternalError(w, r, err)
 				return
 			case err != nil:
 				unauthorized(w)

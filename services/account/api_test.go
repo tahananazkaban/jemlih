@@ -83,6 +83,7 @@ func TestTokensFromOtherClientsOrTamperedAreRejected(t *testing.T) {
 
 	for name, token := range map[string]string{
 		"missing":           "",
+		"other user pool":   foreignPoolToken(t, pool),
 		"other app client":  otherPool.SignIn(user.Email, testkit.TestPassword),
 		"tampered":          tampered,
 		"access token":      accessToken(t, pool, user.Email),
@@ -230,6 +231,39 @@ func TestSelfRegisteredUserBecomesRenterOfTheConfiguredRental(t *testing.T) {
 	if want := env.String("RENTAL_ID", "default"); got.Role != "renter" || got.RentalID != want {
 		t.Errorf("me = %+v, want renter in %q", got, want)
 	}
+}
+
+// foreignPoolToken signs an Owner into a throwaway user pool, so the token has a different issuer.
+func foreignPoolToken(t *testing.T, pool *testkit.Pool) string {
+	t.Helper()
+	ctx := context.Background()
+	created, err := pool.Client.CreateUserPool(ctx, &cip.CreateUserPoolInput{
+		PoolName: aws.String("foreign-" + testkit.NewRentalID()),
+		Schema: []types.SchemaAttributeType{{
+			Name: aws.String("rental_id"), AttributeDataType: types.AttributeDataTypeString, Mutable: aws.Bool(true),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create foreign pool: %v", err)
+	}
+	foreign := *pool
+	foreign.ID = aws.ToString(created.UserPool.Id)
+	t.Cleanup(func() {
+		_, _ = pool.Client.DeleteUserPool(context.Background(), &cip.DeleteUserPoolInput{UserPoolId: &foreign.ID})
+	})
+	client, err := pool.Client.CreateUserPoolClient(ctx, &cip.CreateUserPoolClientInput{
+		UserPoolId:        &foreign.ID,
+		ClientName:        aws.String("web"),
+		ExplicitAuthFlows: []types.ExplicitAuthFlowsType{types.ExplicitAuthFlowsTypeAllowUserPasswordAuth},
+	})
+	if err != nil {
+		t.Fatalf("create foreign client: %v", err)
+	}
+	foreign.ClientID = aws.ToString(client.UserPoolClient.ClientId)
+	if _, err := pool.Client.CreateGroup(ctx, &cip.CreateGroupInput{UserPoolId: &foreign.ID, GroupName: aws.String("owner")}); err != nil {
+		t.Fatalf("create foreign group: %v", err)
+	}
+	return foreign.NewUser(testkit.NewRentalID(), auth.Owner).IDToken
 }
 
 func accessToken(t *testing.T, pool *testkit.Pool, email string) string {

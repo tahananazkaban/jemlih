@@ -1,0 +1,34 @@
+# Go
+/bin/
+*.test
+*.out
+coverage.*
+
+# Lambda build artifacts
+bootstrap
+*.zip
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+.pnpm-store/
+
+# OpenTofu
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

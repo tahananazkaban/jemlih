@@ -4,6 +4,12 @@ variable "aws_endpoint" {
   default     = "http://localhost:4566"
 }
 
+variable "fleet_table" {
+  description = "Name of the fleet DynamoDB table; must match FLEET_TABLE of the service."
+  type        = string
+  default     = "jemlih-fleet"
+}
+
 variable "region" {
   description = "AWS region used by every resource."
   type        = string

@@ -19,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 
 	"github.com/tahananazkaban/jemlih/pkg/awsx"
+	"github.com/tahananazkaban/jemlih/pkg/httpx"
 )
 
 const defaultEndpoint = "http://localhost:4566"
@@ -133,9 +134,5 @@ func (r *Response) Decode(v any) {
 
 // ErrorBody is the shared error envelope.
 type ErrorBody struct {
-	Error struct {
-		Code    string            `json:"code"`
-		Message string            `json:"message"`
-		Fields  map[string]string `json:"fields"`
-	} `json:"error"`
+	Error httpx.Error `json:"error"`
 }

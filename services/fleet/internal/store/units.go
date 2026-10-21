@@ -70,15 +70,22 @@ func (s *Units) Create(ctx context.Context, rentalID string, u domain.Unit) erro
 			{Put: &types.Put{TableName: &s.table, Item: plate, ConditionExpression: notExists}},
 		},
 	})
-	var canceled *types.TransactionCanceledException
-	if errors.As(err, &canceled) {
-		// Unit IDs are random, so a failed condition means the plate is taken.
+	if plateTaken(err) {
 		return domain.ErrDuplicatePlate
 	}
 	if err != nil {
 		return fmt.Errorf("create unit: %w", err)
 	}
 	return nil
+}
+
+// plateTaken reports whether the transaction failed only because the plate claim (item 1) exists.
+func plateTaken(err error) bool {
+	var canceled *types.TransactionCanceledException
+	if !errors.As(err, &canceled) || len(canceled.CancellationReasons) < 2 {
+		return false
+	}
+	return aws.ToString(canceled.CancellationReasons[1].Code) == "ConditionalCheckFailed"
 }
 
 // Get returns one Unit of the Rental, or domain.ErrNotFound.
@@ -96,7 +103,7 @@ func (s *Units) Get(ctx context.Context, rentalID, id string) (domain.Unit, erro
 	if out.Item == nil {
 		return domain.Unit{}, domain.ErrNotFound
 	}
-	return fromAttributes(out.Item)
+	return fromItem(out.Item)
 }
 
 // List returns every Unit of the Rental, oldest first.
@@ -116,7 +123,7 @@ func (s *Units) List(ctx context.Context, rentalID string) ([]domain.Unit, error
 			return nil, fmt.Errorf("list units: %w", err)
 		}
 		for _, item := range page.Items {
-			u, err := fromAttributes(item)
+			u, err := fromItem(item)
 			if err != nil {
 				return nil, err
 			}
@@ -143,7 +150,7 @@ func toItem(rentalID string, u domain.Unit) unitItem {
 	}
 }
 
-func fromAttributes(av map[string]types.AttributeValue) (domain.Unit, error) {
+func fromItem(av map[string]types.AttributeValue) (domain.Unit, error) {
 	var item unitItem
 	if err := attributevalue.UnmarshalMap(av, &item); err != nil {
 		return domain.Unit{}, fmt.Errorf("unmarshal unit: %w", err)

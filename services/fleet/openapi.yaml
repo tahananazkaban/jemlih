@@ -1,0 +1,198 @@
+openapi: 3.1.0
+info:
+  title: Jemlih Fleet API
+  version: 0.1.0
+  description: Units of the rental fleet. All money amounts are integer rupiah.
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Liveness probe
+      responses:
+        "200":
+          description: The service is running.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+  /units:
+    get:
+      operationId: listUnits
+      summary: List the Rental's Units, oldest first
+      responses:
+        "200":
+          description: All Units of the Rental.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnitList"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      operationId: createUnit
+      summary: Add a Unit to the fleet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewUnit"
+      responses:
+        "201":
+          description: The Unit was created.
+          headers:
+            Location:
+              description: Path of the new Unit.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Unit"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: A Unit with the same plate number already exists in this Rental.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /units/{id}:
+    get:
+      operationId: getUnit
+      summary: Get one Unit
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The Unit.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Unit"
+        "404":
+          description: No such Unit in this Rental.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          $ref: "#/components/responses/InternalError"
+components:
+  schemas:
+    Transmission:
+      type: string
+      enum: [automatic, manual]
+    UnitStatus:
+      type: string
+      enum: [available]
+    NewUnit:
+      type: object
+      additionalProperties: false
+      required: [model, plate_number, year, transmission, daily_price, hourly_price, security_deposit]
+      properties:
+        model:
+          type: string
+          maxLength: 100
+          examples: ["Honda Vario 125"]
+        plate_number:
+          type: string
+          description: Indonesian plate in any case or spacing; stored as "AB 1234 XY".
+          examples: ["AB 1234 XY"]
+        year:
+          type: integer
+          minimum: 1990
+          description: At most next calendar year.
+        transmission:
+          $ref: "#/components/schemas/Transmission"
+        daily_price:
+          type: integer
+          format: int64
+          minimum: 1
+        hourly_price:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Must not exceed daily_price.
+        security_deposit:
+          type: integer
+          format: int64
+          minimum: 0
+    Unit:
+      type: object
+      required: [id, model, plate_number, year, transmission, daily_price, hourly_price, security_deposit, status, created_at]
+      properties:
+        id:
+          type: string
+        model:
+          type: string
+        plate_number:
+          type: string
+        year:
+          type: integer
+        transmission:
+          $ref: "#/components/schemas/Transmission"
+        daily_price:
+          type: integer
+          format: int64
+        hourly_price:
+          type: integer
+          format: int64
+        security_deposit:
+          type: integer
+          format: int64
+        status:
+          $ref: "#/components/schemas/UnitStatus"
+        created_at:
+          type: string
+          format: date-time
+    UnitList:
+      type: object
+      required: [units]
+      properties:
+        units:
+          type: array
+          items:
+            $ref: "#/components/schemas/Unit"
+    ErrorBody:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              examples: [validation_failed, invalid_body, duplicate_plate, not_found, internal]
+            message:
+              type: string
+            fields:
+              type: object
+              description: Invalid field names mapped to the reason, for validation_failed.
+              additionalProperties:
+                type: string
+  responses:
+    BadRequest:
+      description: The body is malformed or some fields are invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+    InternalError:
+      description: Unexpected failure; details are logged, not returned.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"

@@ -1,0 +1,5 @@
+.git
+infra
+**/node_modules
+**/.next
+**/*_test.go

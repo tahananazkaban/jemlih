@@ -1,8 +1,8 @@
 package fleet_test
 
 import (
-	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/tahananazkaban/jemlih/pkg/env"
@@ -26,7 +26,7 @@ type unit struct {
 // startFleet runs the real fleet service for a fresh Rental against the emulator.
 func startFleet(t *testing.T, rentalID string) *testkit.Client {
 	t.Helper()
-	handler, err := app.New(context.Background(), app.Config{
+	handler, err := app.New(app.Config{
 		AWS:       testkit.AWSConfig(t),
 		UnitTable: env.String("FLEET_TABLE", "jemlih-fleet"),
 		RentalID:  rentalID,
@@ -141,20 +141,42 @@ func TestCreateUnitRejectsInvalidFields(t *testing.T) {
 	}
 }
 
+func TestCreateUnitRequiresEveryField(t *testing.T) {
+	fleet := startFleet(t, testkit.NewRentalID())
+
+	for field := range validUnit() {
+		t.Run(field, func(t *testing.T) {
+			body := validUnit()
+			delete(body, field)
+
+			var e testkit.ErrorBody
+			fleet.Do(http.MethodPost, "/units", body).Expect(http.StatusBadRequest).Decode(&e)
+			if e.Error.Fields[field] != "is required" || len(e.Error.Fields) != 1 {
+				t.Errorf("fields = %v, want only %q required", e.Error.Fields, field)
+			}
+		})
+	}
+}
+
 func TestCreateUnitRejectsMalformedBody(t *testing.T) {
 	fleet := startFleet(t, testkit.NewRentalID())
 
-	for name, body := range map[string]string{
-		"not json":      "{",
-		"unknown field": `{"model":"Honda Beat","colour":"red"}`,
-		"two objects":   `{} {}`,
-		"wrong type":    `{"year":"2023"}`,
+	for name, tc := range map[string]struct{ body, message string }{
+		"empty":         {"", "body is empty"},
+		"not json":      {"{", "body is not valid JSON"},
+		"unknown field": {`{"model":"Honda Beat","colour":"red"}`, `unknown field "colour"`},
+		"two objects":   {`{} {}`, "body must contain a single JSON object"},
+		"wrong type":    {`{"year":"2023"}`, `field "year" must be a number`},
+		"not an object": {`[]`, "body must be a JSON object"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var e testkit.ErrorBody
-			fleet.Do(http.MethodPost, "/units", body).Expect(http.StatusBadRequest).Decode(&e)
-			if e.Error.Code != "invalid_body" {
-				t.Errorf("code = %q, want invalid_body", e.Error.Code)
+			fleet.Do(http.MethodPost, "/units", tc.body).Expect(http.StatusBadRequest).Decode(&e)
+			if e.Error.Code != "invalid_body" || e.Error.Message != tc.message {
+				t.Errorf("error = %+v, want invalid_body %q", e.Error, tc.message)
+			}
+			if strings.Contains(e.Error.Message, "Go struct") || strings.Contains(e.Error.Message, "json:") {
+				t.Errorf("message leaks decoder internals: %q", e.Error.Message)
 			}
 		})
 	}

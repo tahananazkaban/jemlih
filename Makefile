@@ -3,10 +3,18 @@ SHELL := /bin/bash
 
 TOFU := tofu -chdir=infra/local
 
-export AWS_REGION ?= us-east-1
-export AWS_ACCESS_KEY_ID ?= test
-export AWS_SECRET_ACCESS_KEY ?= test
-export JEMLIH_AWS_ENDPOINT ?= http://localhost:4566
+# Optional overrides of the defaults below, see .env.example
+-include .env
+
+FLOCI_PORT ?= 4566
+AWS_REGION ?= us-east-1
+AWS_ACCESS_KEY_ID ?= test
+AWS_SECRET_ACCESS_KEY ?= test
+JEMLIH_AWS_ENDPOINT ?= http://localhost:$(FLOCI_PORT)
+FLEET_TABLE ?= jemlih-fleet
+export FLOCI_PORT AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY JEMLIH_AWS_ENDPOINT FLEET_TABLE
+
+TOFU_VARS := -var aws_endpoint=$(JEMLIH_AWS_ENDPOINT) -var region=$(AWS_REGION) -var fleet_table=$(FLEET_TABLE)
 
 .PHONY: help up down test vet fmt
 
@@ -16,7 +24,7 @@ help: ## List available commands
 up: ## Start the emulator, apply infrastructure and start the services
 	docker compose up -d --wait floci
 	$(TOFU) init -input=false -no-color > /dev/null
-	$(TOFU) apply -input=false -auto-approve -var aws_endpoint=$(JEMLIH_AWS_ENDPOINT)
+	$(TOFU) apply -input=false -auto-approve $(TOFU_VARS)
 	docker compose up -d --build --wait fleet
 
 down: ## Stop everything and delete emulator data and local infrastructure state

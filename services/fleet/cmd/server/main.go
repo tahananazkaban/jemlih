@@ -43,7 +43,7 @@ func run(addr string) error {
 	if err != nil {
 		return err
 	}
-	handler, err := app.New(ctx, app.ConfigFromEnv(awsCfg))
+	handler, err := app.New(app.ConfigFromEnv(awsCfg))
 	if err != nil {
 		return err
 	}

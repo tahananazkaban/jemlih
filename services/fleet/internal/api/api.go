@@ -36,14 +36,33 @@ func (h *Handler) Routes() http.Handler {
 	return mux
 }
 
+// unitRequest uses pointers so a missing field is not mistaken for its zero value.
 type unitRequest struct {
-	Model           string `json:"model"`
-	PlateNumber     string `json:"plate_number"`
-	Year            int    `json:"year"`
-	Transmission    string `json:"transmission"`
-	DailyPrice      int64  `json:"daily_price"`
-	HourlyPrice     int64  `json:"hourly_price"`
-	SecurityDeposit int64  `json:"security_deposit"`
+	Model           *string `json:"model"`
+	PlateNumber     *string `json:"plate_number"`
+	Year            *int    `json:"year"`
+	Transmission    *string `json:"transmission"`
+	DailyPrice      *int64  `json:"daily_price"`
+	HourlyPrice     *int64  `json:"hourly_price"`
+	SecurityDeposit *int64  `json:"security_deposit"`
+}
+
+func (r unitRequest) missingFields() map[string]string {
+	missing := map[string]string{}
+	for name, absent := range map[string]bool{
+		"model":            r.Model == nil,
+		"plate_number":     r.PlateNumber == nil,
+		"year":             r.Year == nil,
+		"transmission":     r.Transmission == nil,
+		"daily_price":      r.DailyPrice == nil,
+		"hourly_price":     r.HourlyPrice == nil,
+		"security_deposit": r.SecurityDeposit == nil,
+	} {
+		if absent {
+			missing[name] = "is required"
+		}
+	}
+	return missing
 }
 
 type unitResponse struct {
@@ -73,14 +92,18 @@ func (h *Handler) createUnit(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, httpx.Error{Code: "invalid_body", Message: err.Error()})
 		return
 	}
+	if missing := req.missingFields(); len(missing) > 0 {
+		httpx.WriteError(w, http.StatusBadRequest, httpx.Error{Code: "validation_failed", Message: "some fields are invalid", Fields: missing})
+		return
+	}
 	unit, err := domain.NewUnit{
-		Model:           req.Model,
-		PlateNumber:     req.PlateNumber,
-		Year:            req.Year,
-		Transmission:    domain.Transmission(req.Transmission),
-		DailyPrice:      req.DailyPrice,
-		HourlyPrice:     req.HourlyPrice,
-		SecurityDeposit: req.SecurityDeposit,
+		Model:           *req.Model,
+		PlateNumber:     *req.PlateNumber,
+		Year:            *req.Year,
+		Transmission:    domain.Transmission(*req.Transmission),
+		DailyPrice:      *req.DailyPrice,
+		HourlyPrice:     *req.HourlyPrice,
+		SecurityDeposit: *req.SecurityDeposit,
 	}.Build(h.NewID(), h.Now())
 	var invalid *domain.ValidationError
 	if errors.As(err, &invalid) {

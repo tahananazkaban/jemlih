@@ -2,7 +2,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -33,7 +32,7 @@ func ConfigFromEnv(awsCfg aws.Config) Config {
 }
 
 // New returns the fleet HTTP handler.
-func New(_ context.Context, cfg Config) (http.Handler, error) {
+func New(cfg Config) (http.Handler, error) {
 	if cfg.UnitTable == "" || cfg.RentalID == "" {
 		return nil, errors.New("fleet: unit table and rental ID are required")
 	}

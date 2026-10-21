@@ -1,6 +1,6 @@
 # Units and plate claims of every Rental, keyed PK=RENTAL#<id>.
 resource "aws_dynamodb_table" "fleet" {
-  name         = "jemlih-fleet"
+  name         = var.fleet_table
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "PK"
   range_key    = "SK"

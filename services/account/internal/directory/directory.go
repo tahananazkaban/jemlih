@@ -17,8 +17,8 @@ import (
 	"github.com/tahananazkaban/jemlih/services/account/internal/domain"
 )
 
-// RentalAttribute is the custom user attribute tying an account to its Rental.
-const RentalAttribute = "custom:rental_id"
+// rentalAttribute is the custom user attribute tying an account to its Rental.
+const rentalAttribute = "custom:rental_id"
 
 // Directory creates and lists accounts in one user pool.
 type Directory struct {
@@ -32,7 +32,7 @@ func New(client *cip.Client, poolID string) *Directory {
 
 // Create adds a back-office account with a temporary password the user must change at first sign-in.
 func (d *Directory) Create(ctx context.Context, rentalID string, role auth.Role, m domain.NewMember) (domain.Member, string, error) {
-	password, err := TemporaryPassword()
+	password, err := temporaryPassword()
 	if err != nil {
 		return domain.Member{}, "", err
 	}
@@ -45,7 +45,7 @@ func (d *Directory) Create(ctx context.Context, rentalID string, role auth.Role,
 			{Name: aws.String("email"), Value: &m.Email},
 			{Name: aws.String("email_verified"), Value: aws.String("true")},
 			{Name: aws.String("name"), Value: &m.Name},
-			{Name: aws.String(RentalAttribute), Value: &rentalID},
+			{Name: aws.String(rentalAttribute), Value: &rentalID},
 		},
 	})
 	// Email is the username, so a taken email can surface as either error.
@@ -100,7 +100,7 @@ func (d *Directory) AssignRental(ctx context.Context, username, rentalID string)
 	_, err := d.client.AdminUpdateUserAttributes(ctx, &cip.AdminUpdateUserAttributesInput{
 		UserPoolId:     &d.poolID,
 		Username:       &username,
-		UserAttributes: []types.AttributeType{{Name: aws.String(RentalAttribute), Value: &rentalID}},
+		UserAttributes: []types.AttributeType{{Name: aws.String(rentalAttribute), Value: &rentalID}},
 	})
 	if err != nil {
 		return fmt.Errorf("assign rental: %w", err)
@@ -122,7 +122,7 @@ func (d *Directory) ListGroup(ctx context.Context, rentalID string, role auth.Ro
 		}
 		// Cognito cannot filter on custom attributes, so the Rental is matched here.
 		for _, u := range page.Users {
-			if attribute(u.Attributes, RentalAttribute) == rentalID {
+			if attribute(u.Attributes, rentalAttribute) == rentalID {
 				members = append(members, toMember(u.Attributes, u.UserStatus, aws.ToTime(u.UserCreateDate)))
 			}
 		}
@@ -156,8 +156,8 @@ const (
 	symbols = "!@#$%^&*-_=+"
 )
 
-// TemporaryPassword returns 16 random characters with every character class the pool requires.
-func TemporaryPassword() (string, error) {
+// temporaryPassword returns 16 random characters with every character class the pool requires.
+func temporaryPassword() (string, error) {
 	classes := []string{lower, upper, digits, symbols}
 	all := lower + upper + digits + symbols
 	out := make([]byte, 16)

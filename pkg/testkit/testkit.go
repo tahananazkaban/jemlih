@@ -63,8 +63,16 @@ func NewRentalID() string {
 
 // Client sends JSON requests to a service started in-process.
 type Client struct {
-	t   testing.TB
-	srv *httptest.Server
+	t     testing.TB
+	srv   *httptest.Server
+	token string
+}
+
+// As returns a client that sends token as its Bearer credentials.
+func (c *Client) As(token string) *Client {
+	clone := *c
+	clone.token = token
+	return &clone
 }
 
 // Serve starts handler on a local port for the duration of the test.
@@ -103,6 +111,9 @@ func (c *Client) Do(method, path string, body any) *Response {
 		c.t.Fatalf("build request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 	resp, err := c.srv.Client().Do(req)
 	if err != nil {
 		c.t.Fatalf("%s %s: %v", method, path, err)

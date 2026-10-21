@@ -3,10 +3,13 @@ module github.com/tahananazkaban/jemlih
 go 1.27
 
 require (
+	github.com/aws/aws-lambda-go v1.55.1
 	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/config v1.33.9
 	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.21.14
+	github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider v1.75.4
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.72.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 )
 

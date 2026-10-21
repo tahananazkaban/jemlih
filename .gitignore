@@ -1,5 +1,6 @@
 # Go
 /bin/
+/build/
 *.test
 *.out
 coverage.*

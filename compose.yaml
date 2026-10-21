@@ -1,5 +1,29 @@
 name: jemlih
 
+x-service: &service
+  build:
+    context: .
+  healthcheck:
+    test: ["CMD", "/service", "-healthcheck"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+  depends_on:
+    floci:
+      condition: service_healthy
+  mem_limit: 128m
+  restart: unless-stopped
+
+x-service-env: &service-env
+  HTTP_ADDR: ":8080"
+  JEMLIH_AWS_ENDPOINT: http://floci:4566
+  AWS_REGION: ${AWS_REGION:-us-east-1}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+  # Tokens name floci as issuer because FLOCI_HOSTNAME is floci
+  COGNITO_ISSUER: http://floci:4566/${COGNITO_USER_POOL_ID:-unset}
+  COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-unset}
+
 services:
   floci:
     image: floci/floci:2.3.0
@@ -23,29 +47,28 @@ services:
     restart: unless-stopped
 
   fleet:
+    <<: *service
     build:
       context: .
-      dockerfile: services/fleet/Dockerfile
+      args:
+        SERVICE: fleet
     ports:
       - "${FLEET_PORT:-8081}:8080"
     environment:
-      HTTP_ADDR: ":8080"
-      JEMLIH_AWS_ENDPOINT: http://floci:4566
-      AWS_REGION: ${AWS_REGION:-us-east-1}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+      <<: *service-env
       FLEET_TABLE: ${FLEET_TABLE:-jemlih-fleet}
-      RENTAL_ID: ${RENTAL_ID:-default}
-    healthcheck:
-      test: ["CMD", "/fleet", "-healthcheck"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    depends_on:
-      floci:
-        condition: service_healthy
-    mem_limit: 128m
-    restart: unless-stopped
+
+  account:
+    <<: *service
+    build:
+      context: .
+      args:
+        SERVICE: account
+    ports:
+      - "${ACCOUNT_PORT:-8082}:8080"
+    environment:
+      <<: *service-env
+      COGNITO_USER_POOL_ID: ${COGNITO_USER_POOL_ID:-unset}
 
 volumes:
   floci-data:

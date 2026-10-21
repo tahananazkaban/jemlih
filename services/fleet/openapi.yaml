@@ -1,13 +1,16 @@
 openapi: 3.1.0
 info:
   title: Jemlih Fleet API
-  version: 0.1.0
-  description: Units of the rental fleet. All money amounts are integer rupiah.
+  version: 0.2.0
+  description: Units of the rental fleet. All money amounts are integer rupiah. The Rental is always the caller's, taken from the ID token.
+security:
+  - idToken: []
 paths:
   /healthz:
     get:
       operationId: getHealth
       summary: Liveness probe
+      security: []
       responses:
         "200":
           description: The service is running.
@@ -23,7 +26,7 @@ paths:
   /units:
     get:
       operationId: listUnits
-      summary: List the Rental's Units, oldest first
+      summary: List the Rental's Units, oldest first (any role)
       responses:
         "200":
           description: All Units of the Rental.
@@ -31,11 +34,15 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UnitList"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "500":
           $ref: "#/components/responses/InternalError"
     post:
       operationId: createUnit
-      summary: Add a Unit to the fleet
+      summary: Add a Unit to the fleet (Owner only)
       requestBody:
         required: true
         content:
@@ -62,12 +69,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorBody"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "500":
           $ref: "#/components/responses/InternalError"
   /units/{id}:
     get:
       operationId: getUnit
-      summary: Get one Unit
+      summary: Get one Unit (any role)
       parameters:
         - name: id
           in: path
@@ -87,9 +98,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorBody"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "500":
           $ref: "#/components/responses/InternalError"
 components:
+  securitySchemes:
+    idToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Cognito ID token issued to the web app client.
   schemas:
     Transmission:
       type: string
@@ -175,7 +196,7 @@ components:
           properties:
             code:
               type: string
-              examples: [validation_failed, invalid_body, duplicate_plate, not_found, internal]
+              examples: [validation_failed, invalid_body, duplicate_plate, not_found, unauthenticated, forbidden, internal]
             message:
               type: string
             fields:
@@ -184,6 +205,22 @@ components:
               additionalProperties:
                 type: string
   responses:
+    Unauthenticated:
+      description: The ID token is missing, invalid, expired or issued to another client.
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+    Forbidden:
+      description: The caller's role may not perform this action, or the account has no role.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
     BadRequest:
       description: The body is malformed or some fields are invalid.
       content:

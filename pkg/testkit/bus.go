@@ -23,6 +23,8 @@ type Tap struct {
 	sqs      *sqs.Client
 	queueURL string
 	pending  []Delivered
+	// seen drops at-least-once redeliveries, as every consumer must.
+	seen map[string]bool
 }
 
 // Delivered is an event as EventBridge handed it to a target.
@@ -80,7 +82,15 @@ func TapRental(t testing.TB, rentalID string) *Tap {
 	t.Cleanup(func() {
 		_, _ = eb.RemoveTargets(context.Background(), &eventbridge.RemoveTargetsInput{Rule: &name, EventBusName: &bus, Ids: []string{"tap"}})
 	})
-	return &Tap{t: t, sqs: sqsClient, queueURL: aws.ToString(queue.QueueUrl)}
+	return &Tap{t: t, sqs: sqsClient, queueURL: aws.ToString(queue.QueueUrl), seen: map[string]bool{}}
+}
+
+// ExpectNone fails the test if any event for the Rental arrives within window.
+func (tap *Tap) ExpectNone(window time.Duration) {
+	tap.t.Helper()
+	if got, ok := tap.receive(window); ok {
+		tap.t.Fatalf("unexpected %s event: %s", got.Envelope.Type, got.Detail)
+	}
 }
 
 // Next waits for the next event of eventType, failing the test if another type arrives first or none does.
@@ -115,8 +125,12 @@ func (tap *Tap) receive(timeout time.Duration) (Delivered, bool) {
 			if err := json.Unmarshal(d.Detail, &d.Envelope); err != nil {
 				tap.t.Fatalf("decode envelope: %v", err)
 			}
-			tap.pending = append(tap.pending, d)
 			_, _ = tap.sqs.DeleteMessage(context.Background(), &sqs.DeleteMessageInput{QueueUrl: &tap.queueURL, ReceiptHandle: m.ReceiptHandle})
+			if tap.seen[d.Envelope.EventID] {
+				continue
+			}
+			tap.seen[d.Envelope.EventID] = true
+			tap.pending = append(tap.pending, d)
 		}
 	}
 	if len(tap.pending) == 0 {

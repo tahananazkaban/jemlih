@@ -18,14 +18,21 @@ import (
 // maxEntriesPerPut is the PutEvents batch limit.
 const maxEntriesPerPut = 10
 
-// Relay publishes newly inserted outbox items; a returned error makes Lambda retry the whole batch.
+// Relay publishes newly inserted outbox items to the bus.
 type Relay struct {
 	Bus     *eventbridge.Client
 	BusName string
 }
 
-func (r *Relay) Handle(ctx context.Context, batch lambdaevents.DynamoDBEvent) error {
-	var entries []types.PutEventsRequestEntry
+type pending struct {
+	sequence string
+	entry    types.PutEventsRequestEntry
+}
+
+// Handle publishes the batch in stream order and reports the first record it could not publish;
+// Lambda then retries from that record, so nothing after it is skipped.
+func (r *Relay) Handle(ctx context.Context, batch lambdaevents.DynamoDBEvent) (lambdaevents.DynamoDBEventResponse, error) {
+	var queue []pending
 	for _, rec := range batch.Records {
 		// Data items share the stream, and TTL removals arrive as REMOVE records.
 		if rec.EventName != string(lambdaevents.DynamoDBOperationTypeInsert) {
@@ -35,36 +42,74 @@ func (r *Relay) Handle(ctx context.Context, batch lambdaevents.DynamoDBEvent) er
 		if !events.IsOutboxKey(stringAttr(image, "SK")) {
 			continue
 		}
-		e, err := events.FromOutbox(func(name string) string { return stringAttr(image, name) })
+		entry, err := r.entry(image)
 		if err != nil {
-			return err
+			// A malformed item is retried, then lands in the dead-letter queue with its position.
+			slog.ErrorContext(ctx, "malformed outbox item", "sequence", rec.Change.SequenceNumber, "err", err)
+			return r.publish(ctx, queue, rec.Change.SequenceNumber), nil
 		}
-		detail, err := json.Marshal(e)
-		if err != nil {
-			return fmt.Errorf("marshal %s: %w", e.EventID, err)
-		}
-		entries = append(entries, types.PutEventsRequestEntry{
-			EventBusName: aws.String(r.BusName),
-			Source:       aws.String(e.Source),
-			DetailType:   aws.String(e.Type),
-			Detail:       aws.String(string(detail)),
-			Time:         aws.Time(e.OccurredAt),
-		})
+		queue = append(queue, pending{sequence: rec.Change.SequenceNumber, entry: entry})
 	}
-	for start := 0; start < len(entries); start += maxEntriesPerPut {
-		chunk := entries[start:min(start+maxEntriesPerPut, len(entries))]
-		out, err := r.Bus.PutEvents(ctx, &eventbridge.PutEventsInput{Entries: chunk})
-		if err != nil {
-			return fmt.Errorf("put events: %w", err)
+	return r.publish(ctx, queue, ""), nil
+}
+
+// publish sends queue in chunks and returns a failure at the first unpublished record, or at failAt.
+func (r *Relay) publish(ctx context.Context, queue []pending, failAt string) lambdaevents.DynamoDBEventResponse {
+	for start := 0; start < len(queue); start += maxEntriesPerPut {
+		chunk := queue[start:min(start+maxEntriesPerPut, len(queue))]
+		entries := make([]types.PutEventsRequestEntry, len(chunk))
+		for i, p := range chunk {
+			entries[i] = p.entry
 		}
-		if out.FailedEntryCount > 0 {
-			return fmt.Errorf("put events: %d of %d entries failed", out.FailedEntryCount, len(chunk))
+		out, err := r.Bus.PutEvents(ctx, &eventbridge.PutEventsInput{Entries: entries})
+		if err == nil && out.FailedEntryCount == 0 {
+			continue
 		}
+		first := chunk[0].sequence
+		if err == nil {
+			// Entries before the first failed one are on the bus; retry from the failed one.
+			for i, res := range out.Entries {
+				if res.ErrorCode != nil {
+					first = chunk[i].sequence
+					err = fmt.Errorf("%s: %s", aws.ToString(res.ErrorCode), aws.ToString(res.ErrorMessage))
+					break
+				}
+			}
+		}
+		slog.ErrorContext(ctx, "put events failed", "sequence", first, "err", err)
+		return failure(first)
 	}
-	if len(entries) > 0 {
-		slog.InfoContext(ctx, "relayed events", "count", len(entries))
+	if len(queue) > 0 {
+		slog.InfoContext(ctx, "relayed events", "count", len(queue))
 	}
-	return nil
+	if failAt != "" {
+		return failure(failAt)
+	}
+	return lambdaevents.DynamoDBEventResponse{}
+}
+
+func failure(sequence string) lambdaevents.DynamoDBEventResponse {
+	return lambdaevents.DynamoDBEventResponse{
+		BatchItemFailures: []lambdaevents.DynamoDBBatchItemFailure{{ItemIdentifier: sequence}},
+	}
+}
+
+func (r *Relay) entry(image map[string]lambdaevents.DynamoDBAttributeValue) (types.PutEventsRequestEntry, error) {
+	e, err := events.FromOutbox(func(name string) string { return stringAttr(image, name) })
+	if err != nil {
+		return types.PutEventsRequestEntry{}, err
+	}
+	detail, err := json.Marshal(e)
+	if err != nil {
+		return types.PutEventsRequestEntry{}, fmt.Errorf("marshal %s: %w", e.EventID, err)
+	}
+	return types.PutEventsRequestEntry{
+		EventBusName: aws.String(r.BusName),
+		Source:       aws.String(e.Source),
+		DetailType:   aws.String(e.Type),
+		Detail:       aws.String(string(detail)),
+		Time:         aws.Time(e.OccurredAt),
+	}, nil
 }
 
 // stringAttr reads a string or number attribute as text.

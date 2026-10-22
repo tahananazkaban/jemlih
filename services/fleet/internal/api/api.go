@@ -121,7 +121,7 @@ func (h *Handler) createUnit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rentalID := auth.MustFromContext(r.Context()).RentalID
-	created, err := unitCreated(rentalID, unit, unit.CreatedAt)
+	created, err := unitCreated(rentalID, unit)
 	if err != nil {
 		httpx.InternalError(w, r, err)
 		return

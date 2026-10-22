@@ -16,13 +16,13 @@ const OutboxPrefix = "EVENT#"
 // outboxRetention is how long a relayed outbox item stays before TTL deletes it.
 const outboxRetention = 24 * time.Hour
 
-// OutboxPut is the transaction item that stores e next to the change it describes, under partition pk.
-func OutboxPut(table, pk string, e Envelope) types.TransactWriteItem {
+// OutboxPut is the transaction item that stores e in its Rental's partition, next to the change it describes.
+func OutboxPut(table string, e Envelope) types.TransactWriteItem {
 	return types.TransactWriteItem{Put: &types.Put{
 		TableName:           aws.String(table),
 		ConditionExpression: aws.String("attribute_not_exists(PK)"),
 		Item: map[string]types.AttributeValue{
-			"PK":          &types.AttributeValueMemberS{Value: pk},
+			"PK":          &types.AttributeValueMemberS{Value: "RENTAL#" + e.RentalID},
 			"SK":          &types.AttributeValueMemberS{Value: OutboxPrefix + e.EventID},
 			"event_id":    &types.AttributeValueMemberS{Value: e.EventID},
 			"type":        &types.AttributeValueMemberS{Value: e.Type},

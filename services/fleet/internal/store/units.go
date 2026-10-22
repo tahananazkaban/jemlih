@@ -69,7 +69,7 @@ func (s *Units) Create(ctx context.Context, rentalID string, u domain.Unit, crea
 		TransactItems: []types.TransactWriteItem{
 			{Put: &types.Put{TableName: &s.table, Item: unit, ConditionExpression: notExists}},
 			{Put: &types.Put{TableName: &s.table, Item: plate, ConditionExpression: notExists}},
-			events.OutboxPut(s.table, rentalKey(rentalID), created),
+			events.OutboxPut(s.table, created),
 		},
 	})
 	if plateTaken(err) {

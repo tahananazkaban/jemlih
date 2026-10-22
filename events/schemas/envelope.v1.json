@@ -4,7 +4,6 @@
   "title": "Event envelope",
   "description": "Wrapper around every event published to the jemlih bus; the event payload is in data.",
   "type": "object",
-  "additionalProperties": false,
   "required": ["event_id", "type", "version", "occurred_at", "rental_id", "source", "data"],
   "properties": {
     "event_id": { "type": "string", "minLength": 1, "description": "Unique per event; consumers deduplicate on it." },

@@ -40,7 +40,7 @@ func New(source, rentalID, eventType string, version int, data any, now time.Tim
 	if err := Validate(eventType, version, raw); err != nil {
 		return Envelope{}, err
 	}
-	return Envelope{
+	e := Envelope{
 		EventID:    uuid.Must(uuid.NewV7()).String(),
 		Type:       eventType,
 		Version:    version,
@@ -48,7 +48,15 @@ func New(source, rentalID, eventType string, version int, data any, now time.Tim
 		RentalID:   rentalID,
 		Source:     source,
 		Data:       raw,
-	}, nil
+	}
+	whole, err := json.Marshal(e)
+	if err != nil {
+		return Envelope{}, fmt.Errorf("marshal %s envelope: %w", eventType, err)
+	}
+	if err := ValidateAgainst(EnvelopeSchema, whole); err != nil {
+		return Envelope{}, err
+	}
+	return e, nil
 }
 
 // SchemaName is the schema file of an event type and version, e.g. UnitCreated.v1.json.

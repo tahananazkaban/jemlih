@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/tahananazkaban/jemlih/events"
 	"github.com/tahananazkaban/jemlih/pkg/auth"
 	"github.com/tahananazkaban/jemlih/pkg/httpx"
 	"github.com/tahananazkaban/jemlih/services/fleet/internal/domain"
@@ -14,7 +15,7 @@ import (
 
 // UnitStore is the persistence the API needs.
 type UnitStore interface {
-	Create(ctx context.Context, rentalID string, u domain.Unit) error
+	Create(ctx context.Context, rentalID string, u domain.Unit, created events.Envelope) error
 	Get(ctx context.Context, rentalID, id string) (domain.Unit, error)
 	List(ctx context.Context, rentalID string) ([]domain.Unit, error)
 }
@@ -119,7 +120,13 @@ func (h *Handler) createUnit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = h.Units.Create(r.Context(), auth.MustFromContext(r.Context()).RentalID, unit)
+	rentalID := auth.MustFromContext(r.Context()).RentalID
+	created, err := unitCreated(rentalID, unit, unit.CreatedAt)
+	if err != nil {
+		httpx.InternalError(w, r, err)
+		return
+	}
+	err = h.Units.Create(r.Context(), rentalID, unit, created)
 	if errors.Is(err, domain.ErrDuplicatePlate) {
 		httpx.WriteError(w, http.StatusConflict, httpx.Error{Code: "duplicate_plate", Message: "a unit with this plate number already exists"})
 		return

@@ -5,6 +5,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY pkg ./pkg
+COPY events ./events
 COPY services/${SERVICE} ./services/${SERVICE}
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/service ./services/${SERVICE}/cmd/server
 

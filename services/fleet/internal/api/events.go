@@ -1,8 +1,6 @@
 package api
 
 import (
-	"time"
-
 	"github.com/tahananazkaban/jemlih/events"
 	"github.com/tahananazkaban/jemlih/services/fleet/internal/domain"
 )
@@ -21,7 +19,7 @@ type unitCreatedV1 struct {
 	Status          string `json:"status"`
 }
 
-func unitCreated(rentalID string, u domain.Unit, now time.Time) (events.Envelope, error) {
+func unitCreated(rentalID string, u domain.Unit) (events.Envelope, error) {
 	return events.New(source, rentalID, "UnitCreated", 1, unitCreatedV1{
 		UnitID:          u.ID,
 		Model:           u.Model,
@@ -32,5 +30,5 @@ func unitCreated(rentalID string, u domain.Unit, now time.Time) (events.Envelope
 		HourlyPrice:     u.HourlyPrice,
 		SecurityDeposit: u.SecurityDeposit,
 		Status:          string(u.Status),
-	}, now)
+	}, u.CreatedAt)
 }

@@ -4,7 +4,6 @@
   "title": "UnitCreated v1",
   "description": "An Owner added a Unit to the fleet. Published by fleet.",
   "type": "object",
-  "additionalProperties": false,
   "required": ["unit_id", "model", "plate_number", "year", "transmission", "daily_price", "hourly_price", "security_deposit", "status"],
   "properties": {
     "unit_id": { "type": "string", "minLength": 1 },

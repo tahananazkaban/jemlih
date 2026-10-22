@@ -47,6 +47,15 @@ resource "aws_kinesis_firehose_delivery_stream" "event_archive" {
     error_output_prefix = "errors/"
     buffering_size      = 1
     buffering_interval  = var.archive_buffer_seconds
+
+    # One event per line (JSON Lines), so replay and Athena can split the objects
+    processing_configuration {
+      enabled = true
+
+      processors {
+        type = "AppendDelimiterToRecord"
+      }
+    }
   }
 }
 
@@ -122,6 +131,11 @@ resource "aws_iam_role_policy" "relay" {
         Action   = "events:PutEvents"
         Resource = aws_cloudwatch_event_bus.main.arn
       },
+      {
+        Effect   = "Allow"
+        Action   = "sqs:SendMessage"
+        Resource = aws_sqs_queue.relay_dlq.arn
+      },
     ]
   })
 }
@@ -144,14 +158,38 @@ resource "aws_lambda_function" "relay" {
   }
 }
 
+# Where stream records end up when the relay keeps failing, instead of being dropped.
+resource "aws_sqs_queue" "relay_dlq" {
+  name                      = "jemlih-events-relay-dlq"
+  message_retention_seconds = 1209600
+}
+
 resource "aws_lambda_event_source_mapping" "relay_fleet" {
   function_name     = aws_lambda_function.relay.arn
   event_source_arn  = aws_dynamodb_table.fleet.stream_arn
   starting_position = "TRIM_HORIZON"
   batch_size        = 10
 
-  # Retries a failing batch a few times, then moves on rather than blocking the shard forever.
-  maximum_retry_attempts = 5
+  # The relay reports the first record it could not publish; retries start there.
+  function_response_types        = ["ReportBatchItemFailures"]
+  bisect_batch_on_function_error = true
+  maximum_retry_attempts         = 5
+
+  destination_config {
+    on_failure {
+      destination_arn = aws_sqs_queue.relay_dlq.arn
+    }
+  }
+
+  # Only outbox inserts reach the relay; data items and TTL removals are filtered out.
+  filter_criteria {
+    filter {
+      pattern = jsonencode({
+        eventName = ["INSERT"]
+        dynamodb  = { Keys = { SK = { S = [{ prefix = "EVENT#" }] } } }
+      })
+    }
+  }
 }
 
 output "event_bus_name" {

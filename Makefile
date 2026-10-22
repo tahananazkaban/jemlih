@@ -19,8 +19,9 @@ export FLOCI_PORT AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY JEMLIH_AWS_
 TOFU_VARS := -var aws_endpoint=$(JEMLIH_AWS_ENDPOINT) -var region=$(AWS_REGION) \
 	-var fleet_table=$(FLEET_TABLE) -var rental_id=$(RENTAL_ID) -var event_bus_name=$(EVENT_BUS_NAME)
 
-# Exports the user pool created by OpenTofu; tokens always name floci as their issuer.
-POOL_ENV = export COGNITO_USER_POOL_ID="$$($(TOFU) output -raw user_pool_id)" \
+# Exports OpenTofu outputs the services and tests need; tokens always name floci as their issuer.
+TOFU_ENV = export COGNITO_USER_POOL_ID="$$($(TOFU) output -raw user_pool_id)" \
+	EVENT_ARCHIVE_BUCKET="$$($(TOFU) output -raw event_archive_bucket)" \
 	COGNITO_CLIENT_ID="$$($(TOFU) output -raw web_client_id)" && \
 	export COGNITO_ISSUER="http://floci:4566/$$COGNITO_USER_POOL_ID" \
 	COGNITO_JWKS_URL="$(JEMLIH_AWS_ENDPOINT)/$$COGNITO_USER_POOL_ID/.well-known/jwks.json"
@@ -37,7 +38,7 @@ up: lambdas ## Start the emulator, apply infrastructure and start the services
 	docker compose up -d --wait floci
 	$(TOFU) init -input=false -no-color > /dev/null
 	$(TOFU) apply -input=false -auto-approve $(TOFU_VARS)
-	$(POOL_ENV) && docker compose up -d --build --wait fleet account
+	$(TOFU_ENV) && docker compose up -d --build --wait fleet account
 
 down: ## Stop everything and delete emulator data and local infrastructure state
 	docker compose down --volumes --remove-orphans
@@ -46,10 +47,10 @@ down: ## Stop everything and delete emulator data and local infrastructure state
 	rm -f infra/local/terraform.tfstate infra/local/terraform.tfstate.backup
 
 test: ## Run the test suite against the running environment (run `make up` first)
-	$(POOL_ENV) && go test ./... -count=1
+	$(TOFU_ENV) && go test ./... -count=1
 
 seed-owner: ## Create the first Owner: make seed-owner EMAIL=you@example.com [PASSWORD=...]
-	@$(POOL_ENV) && SEED_OWNER_PASSWORD='$(PASSWORD)' go run ./services/account/cmd/seed -email "$(or $(EMAIL),owner@jemlih.local)"
+	@$(TOFU_ENV) && SEED_OWNER_PASSWORD='$(PASSWORD)' go run ./services/account/cmd/seed -email "$(or $(EMAIL),owner@jemlih.local)"
 
 lambdas: ## Build the Lambda packages into build/
 	@mkdir -p build

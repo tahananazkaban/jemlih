@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
+	"github.com/tahananazkaban/jemlih/events"
 	"github.com/tahananazkaban/jemlih/services/fleet/internal/domain"
 )
 
@@ -53,8 +54,8 @@ type plateItem struct {
 
 func rentalKey(rentalID string) string { return "RENTAL#" + rentalID }
 
-// Create writes the Unit and claims its plate number in one transaction.
-func (s *Units) Create(ctx context.Context, rentalID string, u domain.Unit) error {
+// Create writes the Unit, claims its plate number and records the created event in one transaction.
+func (s *Units) Create(ctx context.Context, rentalID string, u domain.Unit, created events.Envelope) error {
 	unit, err := attributevalue.MarshalMap(toItem(rentalID, u))
 	if err != nil {
 		return fmt.Errorf("marshal unit: %w", err)
@@ -68,6 +69,7 @@ func (s *Units) Create(ctx context.Context, rentalID string, u domain.Unit) erro
 		TransactItems: []types.TransactWriteItem{
 			{Put: &types.Put{TableName: &s.table, Item: unit, ConditionExpression: notExists}},
 			{Put: &types.Put{TableName: &s.table, Item: plate, ConditionExpression: notExists}},
+			events.OutboxPut(s.table, rentalKey(rentalID), created),
 		},
 	})
 	if plateTaken(err) {

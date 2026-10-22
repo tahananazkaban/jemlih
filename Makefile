@@ -13,10 +13,11 @@ AWS_SECRET_ACCESS_KEY ?= test
 JEMLIH_AWS_ENDPOINT ?= http://localhost:$(FLOCI_PORT)
 FLEET_TABLE ?= jemlih-fleet
 RENTAL_ID ?= default
-export FLOCI_PORT AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY JEMLIH_AWS_ENDPOINT FLEET_TABLE RENTAL_ID
+EVENT_BUS_NAME ?= jemlih
+export FLOCI_PORT AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY JEMLIH_AWS_ENDPOINT FLEET_TABLE RENTAL_ID EVENT_BUS_NAME
 
 TOFU_VARS := -var aws_endpoint=$(JEMLIH_AWS_ENDPOINT) -var region=$(AWS_REGION) \
-	-var fleet_table=$(FLEET_TABLE) -var rental_id=$(RENTAL_ID)
+	-var fleet_table=$(FLEET_TABLE) -var rental_id=$(RENTAL_ID) -var event_bus_name=$(EVENT_BUS_NAME)
 
 # Exports the user pool created by OpenTofu; tokens always name floci as their issuer.
 POOL_ENV = export COGNITO_USER_POOL_ID="$$($(TOFU) output -raw user_pool_id)" \
@@ -24,7 +25,8 @@ POOL_ENV = export COGNITO_USER_POOL_ID="$$($(TOFU) output -raw user_pool_id)" \
 	export COGNITO_ISSUER="http://floci:4566/$$COGNITO_USER_POOL_ID" \
 	COGNITO_JWKS_URL="$(JEMLIH_AWS_ENDPOINT)/$$COGNITO_USER_POOL_ID/.well-known/jwks.json"
 
-LAMBDAS := account-postconfirm
+# Lambda packages as name=package; each builds to build/<name>.zip
+LAMBDAS := account-postconfirm=./services/account/cmd/postconfirm events-relay=./events/cmd/relay
 
 .PHONY: help up down test vet fmt lambdas seed-owner
 
@@ -51,10 +53,10 @@ seed-owner: ## Create the first Owner: make seed-owner EMAIL=you@example.com [PA
 
 lambdas: ## Build the Lambda packages into build/
 	@mkdir -p build
-	@for fn in $(LAMBDAS); do \
-		svc=$${fn%%-*}; cmd=$${fn#*-}; \
+	@for entry in $(LAMBDAS); do \
+		fn=$${entry%%=*}; pkg=$${entry#*=}; \
 		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -tags lambda.norpc \
-			-o build/$$fn/bootstrap ./services/$$svc/cmd/$$cmd && \
+			-o build/$$fn/bootstrap $$pkg && \
 		(cd build/$$fn && rm -f ../$$fn.zip && zip -q -X ../$$fn.zip bootstrap) || exit 1; \
 	done
 
@@ -62,5 +64,5 @@ vet: ## Run static checks
 	go vet ./...
 
 fmt: ## Format Go and OpenTofu code
-	gofmt -w pkg services
+	gofmt -w pkg services events
 	$(TOFU) fmt

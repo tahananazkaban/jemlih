@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "UnitCreated.v1.json",
+  "title": "UnitCreated v1",
+  "description": "An Owner added a Unit to the fleet. Published by fleet.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["unit_id", "model", "plate_number", "year", "transmission", "daily_price", "hourly_price", "security_deposit", "status"],
+  "properties": {
+    "unit_id": { "type": "string", "minLength": 1 },
+    "model": { "type": "string", "minLength": 1 },
+    "plate_number": { "type": "string", "minLength": 1 },
+    "year": { "type": "integer" },
+    "transmission": { "enum": ["automatic", "manual"] },
+    "daily_price": { "type": "integer", "minimum": 1, "description": "Rupiah." },
+    "hourly_price": { "type": "integer", "minimum": 1, "description": "Rupiah." },
+    "security_deposit": { "type": "integer", "minimum": 0, "description": "Rupiah." },
+    "status": { "enum": ["available", "maintenance", "retired"] }
+  }
+}

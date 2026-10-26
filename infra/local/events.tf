@@ -101,6 +101,13 @@ resource "aws_cloudwatch_event_target" "archive_all" {
 }
 
 # Relay from service table streams to the bus; one function, one mapping per table.
+locals {
+  outbox_streams = {
+    fleet   = aws_dynamodb_table.fleet.stream_arn
+    booking = aws_dynamodb_table.booking.stream_arn
+  }
+}
+
 resource "aws_iam_role" "relay" {
   name = "jemlih-events-relay"
 
@@ -124,7 +131,7 @@ resource "aws_iam_role_policy" "relay" {
       {
         Effect   = "Allow"
         Action   = ["dynamodb:DescribeStream", "dynamodb:GetRecords", "dynamodb:GetShardIterator", "dynamodb:ListStreams"]
-        Resource = [aws_dynamodb_table.fleet.stream_arn]
+        Resource = values(local.outbox_streams)
       },
       {
         Effect   = "Allow"
@@ -164,9 +171,11 @@ resource "aws_sqs_queue" "relay_dlq" {
   message_retention_seconds = 1209600
 }
 
-resource "aws_lambda_event_source_mapping" "relay_fleet" {
+resource "aws_lambda_event_source_mapping" "relay" {
+  for_each = local.outbox_streams
+
   function_name     = aws_lambda_function.relay.arn
-  event_source_arn  = aws_dynamodb_table.fleet.stream_arn
+  event_source_arn  = each.value
   starting_position = "TRIM_HORIZON"
   batch_size        = 10
 

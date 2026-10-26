@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "BookingCreated.v1.json",
+  "title": "BookingCreated v1",
+  "description": "A Renter booked a Unit, which is now held until hold_expires_at. Published by booking.",
+  "type": "object",
+  "required": ["booking_id", "unit_id", "renter_id", "renter_email", "pickup_at", "return_at", "hold_expires_at", "rental_fee", "security_deposit", "total_amount"],
+  "properties": {
+    "booking_id": { "type": "string", "minLength": 1 },
+    "unit_id": { "type": "string", "minLength": 1 },
+    "renter_id": { "type": "string", "minLength": 1 },
+    "renter_email": { "type": "string", "format": "email" },
+    "pickup_at": { "type": "string", "format": "date-time" },
+    "return_at": { "type": "string", "format": "date-time" },
+    "hold_expires_at": { "type": "string", "format": "date-time" },
+    "rental_fee": { "type": "integer", "minimum": 1, "description": "Rupiah." },
+    "security_deposit": { "type": "integer", "minimum": 0, "description": "Rupiah." },
+    "total_amount": { "type": "integer", "minimum": 1, "description": "Rupiah; rental_fee + security_deposit." }
+  }
+}

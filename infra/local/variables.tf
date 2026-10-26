@@ -28,6 +28,12 @@ variable "fleet_table" {
   default     = "jemlih-fleet"
 }
 
+variable "booking_table" {
+  description = "Name of the booking DynamoDB table; must match BOOKING_TABLE of the service."
+  type        = string
+  default     = "jemlih-booking"
+}
+
 variable "event_bus_name" {
   description = "Name of the custom EventBridge bus; must match EVENT_BUS_NAME of the tests."
   type        = string

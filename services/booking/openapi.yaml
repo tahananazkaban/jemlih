@@ -1,0 +1,316 @@
+openapi: 3.1.0
+info:
+  title: Jemlih Booking API
+  version: 0.1.0
+  description: >-
+    Availability, bookings and cancellations. Money is integer rupiah; times are RFC 3339.
+    A window is pickup inclusive and return exclusive, so a return and the next pickup may share an instant.
+    The Rental is always the caller's, taken from the ID token.
+security:
+  - idToken: []
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: The service is running.
+  /availability:
+    get:
+      operationId: getAvailability
+      summary: Units free for the whole window, with their price (any role)
+      parameters:
+        - $ref: "#/components/parameters/PickupAt"
+        - $ref: "#/components/parameters/ReturnAt"
+      responses:
+        "200":
+          description: Bookable Units with no live reservation overlapping the window.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Availability"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /bookings:
+    post:
+      operationId: createBooking
+      summary: Book and hold a Unit (Renter only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewBooking"
+      responses:
+        "201":
+          description: The Booking is held until hold_expires_at.
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: No such Unit in the caller's Rental (`unit_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: The Unit is booked for part of the window (`unit_unavailable`) or not bookable at all (`unit_not_bookable`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "503":
+          description: Too many concurrent changes to the Unit's calendar (`busy`); safe to retry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+    get:
+      operationId: listBookings
+      summary: Renters see their own Bookings, Owners and Staff see all, newest first
+      parameters:
+        - name: from
+          in: query
+          description: Only Bookings whose window ends after this time.
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: Only Bookings whose window starts before this time.
+          schema:
+            type: string
+            format: date-time
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/Status"
+      responses:
+        "200":
+          description: Matching Bookings.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [bookings]
+                properties:
+                  bookings:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Booking"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /bookings/{id}:
+    get:
+      operationId: getBooking
+      summary: One Booking; Renters only see their own
+      parameters:
+        - $ref: "#/components/parameters/BookingID"
+      responses:
+        "200":
+          description: The Booking.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /bookings/{id}/cancel:
+    post:
+      operationId: cancelBooking
+      summary: Cancel a held Booking (its Renter, or an Owner with a reason)
+      parameters:
+        - $ref: "#/components/parameters/BookingID"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  maxLength: 500
+                  description: Required when an Owner cancels.
+      responses:
+        "200":
+          description: The cancelled Booking; its Unit is free again.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The Booking is not held any more (`not_cancellable`), for example already cancelled or expired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+components:
+  securitySchemes:
+    idToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Cognito ID token issued to the web app client.
+  parameters:
+    PickupAt:
+      name: pickup_at
+      in: query
+      required: true
+      schema:
+        type: string
+        format: date-time
+    ReturnAt:
+      name: return_at
+      in: query
+      required: true
+      description: At least 1 hour and at most 30 days after pickup_at.
+      schema:
+        type: string
+        format: date-time
+    BookingID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    Status:
+      type: string
+      enum: [held, cancelled, expired]
+      description: expired is a held Booking whose hold has run out.
+    Price:
+      type: object
+      required: [daily_price, hourly_price, days, extra_hours, rental_fee, security_deposit, total_amount]
+      description: Full days at the daily price plus started hours at the hourly price, the hours never costing more than a day.
+      properties:
+        daily_price: { type: integer, format: int64 }
+        hourly_price: { type: integer, format: int64 }
+        days: { type: integer }
+        extra_hours: { type: integer }
+        rental_fee: { type: integer, format: int64 }
+        security_deposit: { type: integer, format: int64 }
+        total_amount: { type: integer, format: int64, description: rental_fee + security_deposit }
+    Availability:
+      type: object
+      required: [pickup_at, return_at, units]
+      properties:
+        pickup_at: { type: string, format: date-time }
+        return_at: { type: string, format: date-time }
+        units:
+          type: array
+          items:
+            type: object
+            required: [id, model, plate_number, transmission, price]
+            properties:
+              id: { type: string }
+              model: { type: string }
+              plate_number: { type: string }
+              transmission: { type: string, enum: [automatic, manual] }
+              price: { $ref: "#/components/schemas/Price" }
+    NewBooking:
+      type: object
+      additionalProperties: false
+      required: [unit_id, pickup_at, return_at]
+      properties:
+        unit_id: { type: string }
+        pickup_at: { type: string, format: date-time }
+        return_at: { type: string, format: date-time }
+    Booking:
+      type: object
+      required: [id, unit, renter_id, pickup_at, return_at, status, hold_expires_at, price, created_at]
+      properties:
+        id: { type: string }
+        unit:
+          type: object
+          description: The Unit as it was when booked.
+          required: [id, model, plate_number]
+          properties:
+            id: { type: string }
+            model: { type: string }
+            plate_number: { type: string }
+        renter_id: { type: string }
+        pickup_at: { type: string, format: date-time }
+        return_at: { type: string, format: date-time }
+        status: { $ref: "#/components/schemas/Status" }
+        hold_expires_at: { type: string, format: date-time }
+        price:
+          $ref: "#/components/schemas/Price"
+          description: Copied from the Unit when booked; later price changes do not affect it.
+        created_at: { type: string, format: date-time }
+        cancellation:
+          type: object
+          required: [by, reason, at]
+          properties:
+            by: { type: string, enum: [renter, owner] }
+            reason: { type: string }
+            at: { type: string, format: date-time }
+    ErrorBody:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              examples: [validation_failed, invalid_body, unit_not_found, unit_unavailable, unit_not_bookable, not_cancellable, not_found, busy, unauthenticated, forbidden, internal]
+            message: { type: string }
+            fields:
+              type: object
+              additionalProperties: { type: string }
+  responses:
+    BadRequest:
+      description: Malformed body or invalid fields.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    NotFound:
+      description: No such Booking visible to the caller.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    Unauthenticated:
+      description: The ID token is missing, invalid, expired or issued to another client.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    Forbidden:
+      description: The caller's role may not perform this action.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }

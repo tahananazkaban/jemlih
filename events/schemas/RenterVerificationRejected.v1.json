@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "RenterVerificationRejected.v1.json",
+  "title": "RenterVerificationRejected v1",
+  "description": "An Owner rejected a Renter's verification with a reason. Published by customer.",
+  "type": "object",
+  "required": ["renter_id", "renter_email", "reason", "documents", "rejected_by"],
+  "properties": {
+    "renter_id": { "type": "string", "minLength": 1 },
+    "renter_email": { "type": "string", "format": "email" },
+    "reason": { "type": "string", "minLength": 1 },
+    "documents": {
+      "type": "array",
+      "description": "Documents the Renter must upload again; empty when only the profile needs fixing.",
+      "items": { "enum": ["id_card", "driving_licence", "selfie"] }
+    },
+    "rejected_by": { "type": "string", "minLength": 1, "description": "User ID of the rejecting Owner." }
+  }
+}

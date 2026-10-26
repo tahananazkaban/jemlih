@@ -1,0 +1,420 @@
+openapi: 3.1.0
+info:
+  title: Jemlih Customer API
+  version: 0.1.0
+  description: >-
+    Renter profiles, identity documents and their verification. Documents never pass through this service:
+    the browser uploads each file straight to a private bucket with a presigned URL, then attaches it by its upload ID.
+    A Renter becomes pending once their profile and all three documents are saved, and stays verified once approved.
+    The Rental is always the caller's, taken from the ID token.
+security:
+  - idToken: []
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: The service is running.
+  /renters/me:
+    get:
+      operationId: getMyRenter
+      summary: The caller's profile, documents and verification (Renter only)
+      responses:
+        "200":
+          description: The caller's record; a Renter who has saved nothing reads as unverified with every document missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Renter" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /renters/me/profile:
+    put:
+      operationId: updateMyProfile
+      summary: Save the caller's name and phone number (Renter only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Profile" }
+      responses:
+        "200":
+          description: The saved record; it becomes pending if every document is already uploaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Renter" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
+          description: A verified Renter tried to change their full name (`name_locked`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+        "503": { $ref: "#/components/responses/Busy" }
+  /renters/me/documents/{type}/uploads:
+    post:
+      operationId: startDocumentUpload
+      summary: Get a presigned URL to upload one document straight to storage (Renter only)
+      parameters:
+        - $ref: "#/components/parameters/DocumentType"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content_type, size]
+              properties:
+                content_type:
+                  type: string
+                  enum: [image/jpeg, image/png, image/webp]
+                size:
+                  type: integer
+                  minimum: 1
+                  maximum: 10485760
+                  description: Exact file size in bytes; the URL is signed for it, so a different size is refused.
+      responses:
+        "201":
+          description: Send the file with `method` to `url`, with exactly `headers`, before `expires_at`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Upload" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/UnknownDocumentType" }
+        "409": { $ref: "#/components/responses/AlreadyVerified" }
+  /renters/me/documents/{type}:
+    put:
+      operationId: attachDocument
+      summary: Make an uploaded file the caller's document of this type (Renter only)
+      description: Replaces any earlier document of the type. The file must be a JPEG, PNG or WebP image of at most 10 MiB.
+      parameters:
+        - $ref: "#/components/parameters/DocumentType"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [upload_id]
+              properties:
+                upload_id: { type: string }
+      responses:
+        "200":
+          description: The saved record; it becomes pending once complete and nothing the Owner asked for is outstanding.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Renter" }
+        "400":
+          description: >-
+            Invalid fields, no file uploaded for this ID and type (`upload_not_found`), a file over 10 MiB (`file_too_large`)
+            or a file that is not an accepted image (`unsupported_file_type`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/UnknownDocumentType" }
+        "409": { $ref: "#/components/responses/AlreadyVerified" }
+        "503": { $ref: "#/components/responses/Busy" }
+  /renters:
+    get:
+      operationId: listRenters
+      summary: Renters of the Rental, longest in their status first (Owner and Staff)
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Status" }
+      responses:
+        "200":
+          description: Renters who have saved a profile or a document.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [renters]
+                properties:
+                  renters:
+                    type: array
+                    items: { $ref: "#/components/schemas/Renter" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /renters/{id}:
+    get:
+      operationId: getRenter
+      summary: One Renter's profile and verification, without document links (Owner and Staff)
+      parameters:
+        - $ref: "#/components/parameters/RenterID"
+      responses:
+        "200":
+          description: The Renter.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Renter" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /renters/{id}/documents:
+    get:
+      operationId: getRenterDocuments
+      summary: Short-lived read links for a Renter's documents (Owner only)
+      parameters:
+        - $ref: "#/components/parameters/RenterID"
+      responses:
+        "200":
+          description: One link per uploaded document; each stops working at its `expires_at` (5 minutes by default).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, documents]
+                properties:
+                  version:
+                    type: integer
+                    description: The Renter's version these links show; send it when approving or rejecting.
+                  documents:
+                    type: array
+                    items: { $ref: "#/components/schemas/DocumentLink" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /renters/{id}/approve:
+    post:
+      operationId: approveRenter
+      summary: Verify a pending Renter and publish RenterVerified (Owner only)
+      parameters:
+        - $ref: "#/components/parameters/RenterID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version: { $ref: "#/components/schemas/ReviewedVersion" }
+      responses:
+        "200":
+          description: The Renter is verified for every later Booking.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Renter" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/NotPending" }
+        "503": { $ref: "#/components/responses/Busy" }
+  /renters/{id}/reject:
+    post:
+      operationId: rejectRenter
+      summary: Send a pending Renter back with a reason and publish RenterVerificationRejected (Owner only)
+      parameters:
+        - $ref: "#/components/parameters/RenterID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version, reason]
+              properties:
+                version: { $ref: "#/components/schemas/ReviewedVersion" }
+                reason: { type: string, minLength: 1, maxLength: 500 }
+                documents:
+                  type: array
+                  description: >-
+                    Documents to upload again before the Renter returns to pending.
+                    Without any, the Renter returns to pending on their next profile or document change.
+                  items: { $ref: "#/components/schemas/DocumentType" }
+      responses:
+        "200":
+          description: The Renter is rejected and sees the reason.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Renter" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/NotPending" }
+        "503": { $ref: "#/components/responses/Busy" }
+components:
+  securitySchemes:
+    idToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Cognito ID token issued to the web app client.
+  parameters:
+    DocumentType:
+      name: type
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/DocumentType" }
+    RenterID:
+      name: id
+      in: path
+      required: true
+      description: The Renter's user ID, as `id` in a Renter.
+      schema:
+        type: string
+  schemas:
+    ReviewedVersion:
+      type: integer
+      description: >-
+        The Renter's version the Owner reviewed, from the document links or the Renter.
+        If the Renter changed since, the decision is refused with `renter_changed` so nothing is approved unseen.
+    DocumentType:
+      type: string
+      enum: [id_card, driving_licence, selfie]
+    Status:
+      type: string
+      enum: [unverified, pending, verified, rejected]
+      description: >-
+        unverified is missing a profile field or a document; pending waits for the Owner;
+        rejected waits for the Renter to fix what the Owner asked for.
+    Profile:
+      type: object
+      required: [full_name, phone_number]
+      properties:
+        full_name: { type: string, minLength: 2, maxLength: 100 }
+        phone_number:
+          type: string
+          description: An Indonesian number starting with 0, or an international number starting with +; stored in E.164 form.
+          examples: ["0812-3456-7890", "+49 151 2345 6789"]
+    Document:
+      type: object
+      required: [type, content_type, size, uploaded_at]
+      properties:
+        type: { $ref: "#/components/schemas/DocumentType" }
+        content_type: { type: string }
+        size: { type: integer, description: Bytes. }
+        uploaded_at: { type: string, format: date-time }
+    DocumentLink:
+      allOf:
+        - $ref: "#/components/schemas/Document"
+        - type: object
+          required: [url, expires_at]
+          properties:
+            url: { type: string, format: uri }
+            expires_at: { type: string, format: date-time }
+    Upload:
+      type: object
+      required: [upload_id, method, url, headers, expires_at, max_size]
+      properties:
+        upload_id: { type: string }
+        method: { type: string, enum: [PUT] }
+        url: { type: string, format: uri }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+        expires_at: { type: string, format: date-time }
+        max_size: { type: integer, description: Largest accepted file in bytes. }
+    Renter:
+      type: object
+      required: [id, email, full_name, phone_number, status, documents, missing_documents]
+      properties:
+        id: { type: string }
+        email: { type: string }
+        full_name: { type: string, description: Empty until saved. }
+        phone_number: { type: string, description: E.164; empty until saved. }
+        status: { $ref: "#/components/schemas/Status" }
+        documents:
+          type: array
+          items: { $ref: "#/components/schemas/Document" }
+        missing_documents:
+          type: array
+          items: { $ref: "#/components/schemas/DocumentType" }
+        rejection:
+          type: object
+          description: Present while rejected.
+          required: [reason, documents, rejected_at]
+          properties:
+            reason: { type: string }
+            documents:
+              type: array
+              description: Documents still to upload again.
+              items: { $ref: "#/components/schemas/DocumentType" }
+            rejected_at: { type: string, format: date-time }
+        verified_at: { type: string, format: date-time }
+        status_changed_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        version: { type: integer, description: Increases with every saved change; 0 until first saved. }
+    ErrorBody:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              examples:
+                - validation_failed
+                - invalid_body
+                - unknown_document_type
+                - upload_not_found
+                - file_too_large
+                - unsupported_file_type
+                - already_verified
+                - name_locked
+                - not_pending
+                - renter_changed
+                - not_found
+                - busy
+                - unauthenticated
+                - forbidden
+                - internal
+            message: { type: string }
+            fields:
+              type: object
+              additionalProperties: { type: string }
+  responses:
+    BadRequest:
+      description: Malformed body or invalid fields.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    NotFound:
+      description: No such Renter in the caller's Rental.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    UnknownDocumentType:
+      description: The document type is not id_card, driving_licence or selfie (`unknown_document_type`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    AlreadyVerified:
+      description: The Renter is verified, so documents can no longer change (`already_verified`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    NotPending:
+      description: The Renter is not waiting for review (`not_pending`), or changed since the reviewed version (`renter_changed`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    Busy:
+      description: Too many concurrent changes to the Renter (`busy`); safe to retry.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    Unauthenticated:
+      description: The ID token is missing, invalid, expired or issued to another client.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    Forbidden:
+      description: The caller's role may not perform this action.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "RenterVerified.v1.json",
+  "title": "RenterVerified v1",
+  "description": "An Owner approved a Renter's identity documents; the Renter stays verified for later Bookings. Published by customer.",
+  "type": "object",
+  "required": ["renter_id", "renter_email", "verified_by"],
+  "properties": {
+    "renter_id": { "type": "string", "minLength": 1 },
+    "renter_email": { "type": "string", "format": "email" },
+    "verified_by": { "type": "string", "minLength": 1, "description": "User ID of the approving Owner." }
+  }
+}

@@ -13,13 +13,16 @@ AWS_SECRET_ACCESS_KEY ?= test
 JEMLIH_AWS_ENDPOINT ?= http://localhost:$(FLOCI_PORT)
 FLEET_TABLE ?= jemlih-fleet
 BOOKING_TABLE ?= jemlih-booking
+CUSTOMER_TABLE ?= jemlih-customer
+DOCUMENT_BUCKET ?= jemlih-customer-documents
 FLEET_URL ?= http://localhost:$(or $(FLEET_PORT),8081)
 RENTAL_ID ?= default
 EVENT_BUS_NAME ?= jemlih
-export FLOCI_PORT AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY JEMLIH_AWS_ENDPOINT FLEET_TABLE BOOKING_TABLE FLEET_URL RENTAL_ID EVENT_BUS_NAME
+export FLOCI_PORT AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY JEMLIH_AWS_ENDPOINT FLEET_TABLE BOOKING_TABLE CUSTOMER_TABLE DOCUMENT_BUCKET FLEET_URL RENTAL_ID EVENT_BUS_NAME
 
 TOFU_VARS := -var aws_endpoint=$(JEMLIH_AWS_ENDPOINT) -var region=$(AWS_REGION) \
-	-var fleet_table=$(FLEET_TABLE) -var booking_table=$(BOOKING_TABLE) -var rental_id=$(RENTAL_ID) -var event_bus_name=$(EVENT_BUS_NAME)
+	-var fleet_table=$(FLEET_TABLE) -var booking_table=$(BOOKING_TABLE) -var customer_table=$(CUSTOMER_TABLE) \
+	-var document_bucket=$(DOCUMENT_BUCKET) -var rental_id=$(RENTAL_ID) -var event_bus_name=$(EVENT_BUS_NAME)
 
 # Exports OpenTofu outputs the services and tests need; tokens always name floci as their issuer.
 TOFU_ENV = export COGNITO_USER_POOL_ID="$$($(TOFU) output -raw user_pool_id)" \
@@ -40,7 +43,7 @@ up: lambdas ## Start the emulator, apply infrastructure and start the services
 	docker compose up -d --wait floci
 	$(TOFU) init -input=false -no-color > /dev/null
 	$(TOFU) apply -input=false -auto-approve $(TOFU_VARS)
-	$(TOFU_ENV) && docker compose up -d --build --wait fleet account booking
+	$(TOFU_ENV) && docker compose up -d --build --wait fleet account booking customer
 
 down: ## Stop everything and delete emulator data and local infrastructure state
 	docker compose down --volumes --remove-orphans

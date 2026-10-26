@@ -24,8 +24,11 @@ const (
 	maxBatchGet = 100
 )
 
-// ErrCalendarChanged means another writer changed the Unit's calendar since it was read.
-var ErrCalendarChanged = errors.New("calendar changed concurrently")
+// ErrConcurrentChange means another writer changed the Unit's calendar or the Booking since it was read; retry.
+var ErrConcurrentChange = errors.New("changed concurrently")
+
+// maxBatchGetAttempts bounds retries of keys BatchGetItem leaves unprocessed under throttling.
+const maxBatchGetAttempts = 5
 
 // Store keeps Bookings and Calendars of every Rental in one table: PK=RENTAL#<id>.
 type Store struct {
@@ -74,7 +77,13 @@ func (s *Store) Calendars(ctx context.Context, rentalID string, unitIDs []string
 			keys = append(keys, key(rentalID, calendarPrefix+id))
 		}
 		request := map[string]types.KeysAndAttributes{s.table: {Keys: keys, ConsistentRead: aws.Bool(true)}}
-		for len(request) > 0 {
+		for attempt := 0; len(request) > 0; attempt++ {
+			if attempt == maxBatchGetAttempts {
+				return nil, errors.New("get calendars: keys still unprocessed after retries")
+			}
+			if attempt > 0 {
+				time.Sleep(time.Duration(50<<attempt) * time.Millisecond)
+			}
 			out, err := s.db.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: request})
 			if err != nil {
 				return nil, fmt.Errorf("get calendars: %w", err)
@@ -93,7 +102,7 @@ func (s *Store) Calendars(ctx context.Context, rentalID string, unitIDs []string
 	return cals, nil
 }
 
-// Create stores the Booking, the Unit's next calendar and the created event, failing with ErrCalendarChanged on a race.
+// Create stores the Booking, the Unit's next calendar and the created event, failing with ErrConcurrentChange on a race.
 func (s *Store) Create(ctx context.Context, rentalID string, b domain.Booking, next domain.Calendar, created events.Envelope) error {
 	booking, err := attributevalue.MarshalMap(toBookingItem(rentalID, b))
 	if err != nil {
@@ -108,7 +117,8 @@ func (s *Store) Create(ctx context.Context, rentalID string, b domain.Booking, n
 		calendar,
 		events.OutboxPut(s.table, created),
 	}})
-	return transactionError("create booking", err)
+	// A failed condition on the new Booking means its ID already exists: a bug, not a race.
+	return transactionError("create booking", err, false)
 }
 
 // Cancel stores the cancelled Booking, the Unit's next calendar and the cancelled event.
@@ -132,7 +142,8 @@ func (s *Store) Cancel(ctx context.Context, rentalID string, b domain.Booking, n
 		calendar,
 		events.OutboxPut(s.table, cancelled),
 	}})
-	return transactionError("cancel booking", err)
+	// A failed condition on the Booking means someone else cancelled it first.
+	return transactionError("cancel booking", err, true)
 }
 
 // calendarPut writes next at Version+1, only if the stored calendar is still at next.Version.
@@ -153,20 +164,25 @@ func (s *Store) calendarPut(rentalID string, next domain.Calendar) (types.Transa
 	return types.TransactWriteItem{Put: put}, nil
 }
 
-// transactionError maps a failed calendar condition (item 1) to ErrCalendarChanged.
-func transactionError(op string, err error) error {
+// transactionError maps lost races to ErrConcurrentChange: the calendar's condition (item 1),
+// transactions colliding on the same items, throttling, and optionally the Booking's condition (item 0).
+func transactionError(op string, err error, bookingRace bool) error {
 	if err == nil {
 		return nil
 	}
+	var inProgress *types.TransactionInProgressException
+	if errors.As(err, &inProgress) {
+		return ErrConcurrentChange
+	}
 	var canceled *types.TransactionCanceledException
-	if errors.As(err, &canceled) && len(canceled.CancellationReasons) > 1 {
-		reasons := canceled.CancellationReasons
-		if aws.ToString(reasons[1].Code) == "ConditionalCheckFailed" {
-			return ErrCalendarChanged
-		}
-		if aws.ToString(reasons[0].Code) == "ConditionalCheckFailed" {
-			// The Booking changed under us, e.g. cancelled twice at once.
-			return ErrCalendarChanged
+	if errors.As(err, &canceled) {
+		for i, r := range canceled.CancellationReasons {
+			switch code := aws.ToString(r.Code); {
+			case code == "TransactionConflict" || code == "ThrottlingError" || code == "ProvisionedThroughputExceeded":
+				return ErrConcurrentChange
+			case code == "ConditionalCheckFailed" && (i == 1 || (i == 0 && bookingRace)):
+				return ErrConcurrentChange
+			}
 		}
 	}
 	return fmt.Errorf("%s: %w", op, err)
@@ -284,6 +300,7 @@ type bookingItem struct {
 	SecurityDeposit int64  `dynamodbav:"security_deposit"`
 	Days            int64  `dynamodbav:"days"`
 	ExtraHours      int64  `dynamodbav:"extra_hours"`
+	ExtraHoursFee   int64  `dynamodbav:"extra_hours_fee"`
 	RentalFee       int64  `dynamodbav:"rental_fee"`
 	TotalAmount     int64  `dynamodbav:"total_amount"`
 	Status          string `dynamodbav:"status"`
@@ -301,7 +318,7 @@ func toBookingItem(rentalID string, b domain.Booking) bookingItem {
 		RenterID: b.RenterID, RenterEmail: b.RenterEmail,
 		PickupAt: formatTime(b.Window.PickupAt), ReturnAt: formatTime(b.Window.ReturnAt),
 		DailyPrice: b.Price.DailyPrice, HourlyPrice: b.Price.HourlyPrice, SecurityDeposit: b.Price.SecurityDeposit,
-		Days: b.Price.Days, ExtraHours: b.Price.ExtraHours, RentalFee: b.Price.RentalFee, TotalAmount: b.Price.TotalAmount,
+		Days: b.Price.Days, ExtraHours: b.Price.ExtraHours, ExtraHoursFee: b.Price.ExtraHoursFee, RentalFee: b.Price.RentalFee, TotalAmount: b.Price.TotalAmount,
 		Status: string(b.Status), HoldExpiresAt: formatTime(b.HoldExpiresAt), CreatedAt: formatTime(b.CreatedAt),
 	}
 	if c := b.Cancellation; c != nil {
@@ -322,7 +339,8 @@ func bookingFromItem(av map[string]types.AttributeValue) (domain.Booking, error)
 		RenterEmail: item.RenterEmail,
 		Price: domain.Price{
 			Rates: domain.Rates{DailyPrice: item.DailyPrice, HourlyPrice: item.HourlyPrice, SecurityDeposit: item.SecurityDeposit},
-			Days:  item.Days, ExtraHours: item.ExtraHours, RentalFee: item.RentalFee, TotalAmount: item.TotalAmount,
+			Days:  item.Days, ExtraHours: item.ExtraHours, ExtraHoursFee: item.ExtraHoursFee,
+			RentalFee: item.RentalFee, TotalAmount: item.TotalAmount,
 		},
 		Status: domain.Status(item.Status),
 	}

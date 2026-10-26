@@ -18,6 +18,7 @@ type price struct {
 	HourlyPrice     int64 `json:"hourly_price"`
 	Days            int64 `json:"days"`
 	ExtraHours      int64 `json:"extra_hours"`
+	ExtraHoursFee   int64 `json:"extra_hours_fee"`
 	RentalFee       int64 `json:"rental_fee"`
 	SecurityDeposit int64 `json:"security_deposit"`
 	TotalAmount     int64 `json:"total_amount"`
@@ -96,9 +97,11 @@ func (r *rental) addUnit(plate string, daily, hourly, deposit int64) string {
 
 func (r *rental) as(token string) *testkit.Client { return r.booking.As(token) }
 
-// at is a whole hour well in the future, so windows never start in the past.
+// base is fixed once, a whole hour well in the future, so windows never shift or start in the past.
+var base = time.Now().UTC().Add(72 * time.Hour).Truncate(time.Hour)
+
 func at(hoursFromBase int) time.Time {
-	return time.Now().UTC().Add(72 * time.Hour).Truncate(time.Hour).Add(time.Duration(hoursFromBase) * time.Hour)
+	return base.Add(time.Duration(hoursFromBase) * time.Hour)
 }
 
 func request(unitID string, from, to time.Time) map[string]string {
@@ -130,7 +133,7 @@ func TestCreateBookingHoldsTheUnitAtTodaysPrices(t *testing.T) {
 	if hold := b.HoldExpiresAt.Sub(before); hold < 2*time.Hour-time.Minute || hold > 2*time.Hour+time.Minute {
 		t.Errorf("hold expires %s after creation, want 2h", hold)
 	}
-	want := price{DailyPrice: 85000, HourlyPrice: 15000, Days: 1, ExtraHours: 2, RentalFee: 115000, SecurityDeposit: 300000, TotalAmount: 415000}
+	want := price{DailyPrice: 85000, HourlyPrice: 15000, Days: 1, ExtraHours: 2, ExtraHoursFee: 30000, RentalFee: 115000, SecurityDeposit: 300000, TotalAmount: 415000}
 	if b.Price != want {
 		t.Errorf("price = %+v, want %+v", b.Price, want)
 	}
@@ -150,14 +153,15 @@ func TestPriceBreakdown(t *testing.T) {
 		name        string
 		hours       int
 		days, extra int64
+		extraFee    int64
 		fee         int64
 	}{
-		{"one hour", 1, 0, 1, 15000},
-		{"a few hours", 5, 0, 5, 75000},
-		{"hours capped at the daily price", 8, 0, 8, 100000},
-		{"exactly one day", 24, 1, 0, 100000},
-		{"a day and two hours", 26, 1, 2, 130000},
-		{"three days", 72, 3, 0, 300000},
+		{"one hour", 1, 0, 1, 15000, 15000},
+		{"a few hours", 5, 0, 5, 75000, 75000},
+		{"hours capped at the daily price", 8, 0, 8, 100000, 100000},
+		{"exactly one day", 24, 1, 0, 0, 100000},
+		{"a day and two hours", 26, 1, 2, 30000, 130000},
+		{"three days", 72, 3, 0, 0, 300000},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -167,7 +171,7 @@ func TestPriceBreakdown(t *testing.T) {
 				t.Fatalf("units = %+v", a.Units)
 			}
 			p := a.Units[0].Price
-			if p.Days != tc.days || p.ExtraHours != tc.extra || p.RentalFee != tc.fee || p.TotalAmount != tc.fee+250000 {
+			if p.Days != tc.days || p.ExtraHours != tc.extra || p.ExtraHoursFee != tc.extraFee || p.RentalFee != tc.fee || p.TotalAmount != tc.fee+250000 {
 				t.Errorf("price = %+v, want %d days %d hours fee %d", p, tc.days, tc.extra, tc.fee)
 			}
 		})
@@ -447,7 +451,7 @@ func TestOwnersCancelWithAReason(t *testing.T) {
 }
 
 func TestAnExpiredHoldNoLongerBlocksTheUnit(t *testing.T) {
-	r := newRental(t, 2*time.Second)
+	r := newRental(t, 5*time.Second)
 	unit := r.addUnit("AB 15 Q", 85000, 15000, 300000)
 	var b booking
 	r.as(r.renter).Do(http.MethodPost, "/bookings", request(unit, at(0), at(10))).Expect(http.StatusCreated).Decode(&b)

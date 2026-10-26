@@ -48,6 +48,10 @@ func (c *Client) List(ctx context.Context, token string) ([]Unit, error) {
 		Units []Unit `json:"units"`
 	}
 	err := c.get(ctx, token, "/units", &body)
+	if errors.Is(err, ErrUnitNotFound) {
+		// The collection always exists, so a 404 means fleet is misrouted.
+		return nil, fmt.Errorf("fleet GET /units: unexpected 404")
+	}
 	return body.Units, err
 }
 

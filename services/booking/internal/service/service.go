@@ -79,13 +79,14 @@ func (s *Service) Book(ctx context.Context, c Caller, unitID string, w domain.Wi
 		return domain.Booking{}, ErrUnitNotBookable
 	}
 	id := s.NewID()
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	var b domain.Booking
+	err = retry(func() error {
 		cal, err := s.Store.Calendar(ctx, c.RentalID, unitID)
 		if err != nil {
-			return domain.Booking{}, err
+			return err
 		}
 		now := s.Now().UTC()
-		b := domain.Booking{
+		b = domain.Booking{
 			ID:            id,
 			Unit:          domain.UnitSnapshot{ID: unit.ID, Model: unit.Model, PlateNumber: unit.PlateNumber},
 			RenterID:      c.Subject,
@@ -98,20 +99,15 @@ func (s *Service) Book(ctx context.Context, c Caller, unitID string, w domain.Wi
 		}
 		next, err := cal.Reserve(b.ID, domain.Reservation{Window: w, HoldExpiresAt: b.HoldExpiresAt}, now)
 		if err != nil {
-			return domain.Booking{}, err
+			return err
 		}
 		created, err := bookingCreated(c.RentalID, b)
 		if err != nil {
-			return domain.Booking{}, err
+			return err
 		}
-		err = s.Store.Create(ctx, c.RentalID, b, next, created)
-		if errors.Is(err, store.ErrCalendarChanged) {
-			backoff(attempt)
-			continue
-		}
-		return b, err
-	}
-	return domain.Booking{}, ErrBusy
+		return s.Store.Create(ctx, c.RentalID, b, next, created)
+	})
+	return b, err
 }
 
 // Cancel ends a held Booking: Renters their own, Owners any with a reason.
@@ -120,32 +116,39 @@ func (s *Service) Cancel(ctx context.Context, c Caller, id, reason string) (doma
 	if c.Role == auth.Owner && reason == "" {
 		return domain.Booking{}, ErrReasonRequired
 	}
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	var cancelled domain.Booking
+	err := retry(func() error {
 		b, err := s.Get(ctx, c, id)
 		if err != nil {
-			return domain.Booking{}, err
+			return err
 		}
 		now := s.Now().UTC()
-		cancelled, err := b.Cancel(string(c.Role), reason, now)
-		if err != nil {
-			return domain.Booking{}, err
+		if cancelled, err = b.Cancel(string(c.Role), reason, now); err != nil {
+			return err
 		}
 		cal, err := s.Store.Calendar(ctx, c.RentalID, b.Unit.ID)
 		if err != nil {
-			return domain.Booking{}, err
+			return err
 		}
 		event, err := bookingCancelled(c.RentalID, cancelled)
 		if err != nil {
-			return domain.Booking{}, err
+			return err
 		}
-		err = s.Store.Cancel(ctx, c.RentalID, cancelled, cal.Release(b.ID, now), event)
-		if errors.Is(err, store.ErrCalendarChanged) {
-			backoff(attempt)
-			continue
+		return s.Store.Cancel(ctx, c.RentalID, cancelled, cal.Release(b.ID, now), event)
+	})
+	return cancelled, err
+}
+
+// retry runs attempt again after a lost race, with a growing random pause, up to maxAttempts times.
+func retry(attempt func() error) error {
+	for i := 0; i < maxAttempts; i++ {
+		err := attempt()
+		if !errors.Is(err, store.ErrConcurrentChange) {
+			return err
 		}
-		return cancelled, err
+		time.Sleep(time.Duration(5+rand.IntN(20*(i+1))) * time.Millisecond)
 	}
-	return domain.Booking{}, ErrBusy
+	return ErrBusy
 }
 
 // Get returns a Booking the caller may see; Renters only see their own.
@@ -190,9 +193,4 @@ func (s *Service) List(ctx context.Context, c Caller, f Filter) ([]domain.Bookin
 
 func rates(u fleet.Unit) domain.Rates {
 	return domain.Rates{DailyPrice: u.DailyPrice, HourlyPrice: u.HourlyPrice, SecurityDeposit: u.SecurityDeposit}
-}
-
-// backoff spreads retries so racing writers do not collide again in lockstep.
-func backoff(attempt int) {
-	time.Sleep(time.Duration(5+rand.IntN(20*(attempt+1))) * time.Millisecond)
 }

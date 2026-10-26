@@ -214,13 +214,14 @@ components:
       description: expired is a held Booking whose hold has run out.
     Price:
       type: object
-      required: [daily_price, hourly_price, days, extra_hours, rental_fee, security_deposit, total_amount]
+      required: [daily_price, hourly_price, days, extra_hours, extra_hours_fee, rental_fee, security_deposit, total_amount]
       description: Full days at the daily price plus started hours at the hourly price, the hours never costing more than a day.
       properties:
         daily_price: { type: integer, format: int64 }
         hourly_price: { type: integer, format: int64 }
         days: { type: integer }
-        extra_hours: { type: integer }
+        extra_hours: { type: integer, description: Started hours after the full days. }
+        extra_hours_fee: { type: integer, format: int64, description: extra_hours at the hourly price, capped at one daily_price. }
         rental_fee: { type: integer, format: int64 }
         security_deposit: { type: integer, format: int64 }
         total_amount: { type: integer, format: int64, description: rental_fee + security_deposit }

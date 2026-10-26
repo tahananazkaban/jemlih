@@ -11,6 +11,7 @@ type priceResponse struct {
 	HourlyPrice     int64 `json:"hourly_price"`
 	Days            int64 `json:"days"`
 	ExtraHours      int64 `json:"extra_hours"`
+	ExtraHoursFee   int64 `json:"extra_hours_fee"`
 	RentalFee       int64 `json:"rental_fee"`
 	SecurityDeposit int64 `json:"security_deposit"`
 	TotalAmount     int64 `json:"total_amount"`
@@ -61,7 +62,7 @@ type bookingList struct {
 
 func toPrice(p domain.Price) priceResponse {
 	return priceResponse{
-		DailyPrice: p.DailyPrice, HourlyPrice: p.HourlyPrice, Days: p.Days, ExtraHours: p.ExtraHours,
+		DailyPrice: p.DailyPrice, HourlyPrice: p.HourlyPrice, Days: p.Days, ExtraHours: p.ExtraHours, ExtraHoursFee: p.ExtraHoursFee,
 		RentalFee: p.RentalFee, SecurityDeposit: p.SecurityDeposit, TotalAmount: p.TotalAmount,
 	}
 }

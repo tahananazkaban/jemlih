@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -78,10 +79,12 @@ type Rates struct {
 // Price is what a window costs at given rates.
 type Price struct {
 	Rates
-	Days        int64
-	ExtraHours  int64
-	RentalFee   int64
-	TotalAmount int64
+	Days       int64
+	ExtraHours int64
+	// ExtraHoursFee is ExtraHours at the hourly price, capped at one daily price.
+	ExtraHoursFee int64
+	RentalFee     int64
+	TotalAmount   int64
 }
 
 // Quote prices full days at the daily price and the rest per started hour, never more than a day.
@@ -92,7 +95,7 @@ func Quote(w Window, r Rates) Price {
 	hours := int64((rest + time.Hour - 1) / time.Hour)
 	extra := min(hours*r.HourlyPrice, r.DailyPrice)
 	fee := days*r.DailyPrice + extra
-	return Price{Rates: r, Days: days, ExtraHours: hours, RentalFee: fee, TotalAmount: fee + r.SecurityDeposit}
+	return Price{Rates: r, Days: days, ExtraHours: hours, ExtraHoursFee: extra, RentalFee: fee, TotalAmount: fee + r.SecurityDeposit}
 }
 
 // UnitSnapshot keeps the Unit as the Renter saw it when booking.
@@ -137,7 +140,7 @@ func (b Booking) Cancel(by, reason string, now time.Time) (Booking, error) {
 		return Booking{}, ErrNotCancellable
 	}
 	reason = strings.TrimSpace(reason)
-	if len(reason) > maxReasonChars {
+	if utf8.RuneCountInString(reason) > maxReasonChars {
 		return Booking{}, &ValidationError{Fields: map[string]string{"reason": fmt.Sprintf("must be at most %d characters", maxReasonChars)}}
 	}
 	b.Status = StatusCancelled

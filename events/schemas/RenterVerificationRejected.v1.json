@@ -4,10 +4,10 @@
   "title": "RenterVerificationRejected v1",
   "description": "An Owner rejected a Renter's verification with a reason. Published by customer.",
   "type": "object",
-  "required": ["renter_id", "email", "reason", "documents", "rejected_by"],
+  "required": ["renter_id", "renter_email", "reason", "documents", "rejected_by"],
   "properties": {
     "renter_id": { "type": "string", "minLength": 1 },
-    "email": { "type": "string", "minLength": 1 },
+    "renter_email": { "type": "string", "format": "email" },
     "reason": { "type": "string", "minLength": 1 },
     "documents": {
       "type": "array",

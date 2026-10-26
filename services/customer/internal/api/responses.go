@@ -32,6 +32,7 @@ type renterResponse struct {
 	StatusChangedAt  *time.Time         `json:"status_changed_at,omitempty"`
 	CreatedAt        *time.Time         `json:"created_at,omitempty"`
 	UpdatedAt        *time.Time         `json:"updated_at,omitempty"`
+	Version          int64              `json:"version"`
 }
 
 type renterList struct {
@@ -53,7 +54,9 @@ type documentLinkResponse struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// documentLinkList carries the version the links show, to send back when approving or rejecting.
 type documentLinkList struct {
+	Version   int64                  `json:"version"`
 	Documents []documentLinkResponse `json:"documents"`
 }
 
@@ -64,31 +67,27 @@ func toDocument(t domain.DocumentType, d domain.Document) documentResponse {
 // toRenter never includes storage keys; documents are reached only through presigned links.
 func toRenter(r domain.Renter) renterResponse {
 	body := renterResponse{
-		ID:               r.ID,
-		Email:            r.Email,
-		FullName:         r.FullName,
-		PhoneNumber:      r.PhoneNumber,
-		Status:           string(r.Status),
-		Documents:        []documentResponse{},
-		MissingDocuments: []string{},
-		VerifiedAt:       optional(r.VerifiedAt),
-		StatusChangedAt:  optional(r.StatusChangedAt),
-		CreatedAt:        optional(r.CreatedAt),
-		UpdatedAt:        optional(r.UpdatedAt),
+		ID:          r.ID,
+		Email:       r.Email,
+		FullName:    r.FullName,
+		PhoneNumber: r.PhoneNumber,
+		Status:      string(r.Status),
+		Documents:   []documentResponse{},
+
+		VerifiedAt:      optional(r.VerifiedAt),
+		StatusChangedAt: optional(r.StatusChangedAt),
+		CreatedAt:       optional(r.CreatedAt),
+		UpdatedAt:       optional(r.UpdatedAt),
+		Version:         r.Version,
 	}
 	for _, t := range domain.DocumentTypes {
 		if d, ok := r.Documents[t]; ok {
 			body.Documents = append(body.Documents, toDocument(t, d))
 		}
 	}
-	for _, t := range r.Missing() {
-		body.MissingDocuments = append(body.MissingDocuments, string(t))
-	}
+	body.MissingDocuments = domain.Names(r.Missing())
 	if rej := r.Rejection; rej != nil {
-		body.Rejection = &rejectionResponse{Reason: rej.Reason, Documents: []string{}, RejectedAt: rej.At}
-		for _, t := range rej.Documents {
-			body.Rejection.Documents = append(body.Rejection.Documents, string(t))
-		}
+		body.Rejection = &rejectionResponse{Reason: rej.Reason, Documents: domain.Names(rej.Documents), RejectedAt: rej.At}
 	}
 	return body
 }

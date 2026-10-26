@@ -72,6 +72,7 @@ func (h *Handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 
 type uploadRequest struct {
 	ContentType *string `json:"content_type"`
+	Size        *int64  `json:"size"`
 }
 
 func (h *Handler) startUpload(w http.ResponseWriter, r *http.Request) {
@@ -83,14 +84,12 @@ func (h *Handler) startUpload(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.ContentType == nil {
-		validationFailed(w, map[string]string{"content_type": "is required"})
+	if missing := required(map[string]bool{"content_type": req.ContentType == nil, "size": req.Size == nil}); len(missing) > 0 {
+		validationFailed(w, missing)
 		return
 	}
-	upload, err := h.Renters.StartUpload(r.Context(), identity(r), t, *req.ContentType)
+	upload, err := h.Renters.StartUpload(r.Context(), identity(r), t, *req.ContentType, *req.Size)
 	switch {
-	case errors.Is(err, service.ErrUnsupportedType):
-		validationFailed(w, map[string]string{"content_type": "must be image/jpeg, image/png or image/webp"})
 	case err != nil:
 		h.writeError(w, r, err)
 	default:
@@ -123,12 +122,13 @@ func (h *Handler) attachDocument(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listRenters(w http.ResponseWriter, r *http.Request) {
-	status := domain.Status(r.URL.Query().Get("status"))
-	switch status {
-	case "", domain.StatusUnverified, domain.StatusPending, domain.StatusVerified, domain.StatusRejected:
-	default:
-		validationFailed(w, map[string]string{"status": "must be unverified, pending, verified or rejected"})
-		return
+	var status domain.Status
+	if raw := r.URL.Query().Get("status"); raw != "" {
+		var ok bool
+		if status, ok = domain.ParseStatus(raw); !ok {
+			validationFailed(w, map[string]string{"status": "must be unverified, pending, verified or rejected"})
+			return
+		}
 	}
 	renters, err := h.Renters.List(r.Context(), identity(r), status)
 	if err != nil {
@@ -153,8 +153,8 @@ func (h *Handler) documentLinks(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, err)
 		return
 	}
-	body := documentLinkList{Documents: make([]documentLinkResponse, 0, len(links))}
-	for _, l := range links {
+	body := documentLinkList{Version: links.Version, Documents: make([]documentLinkResponse, 0, len(links.Documents))}
+	for _, l := range links.Documents {
 		body.Documents = append(body.Documents, documentLinkResponse{
 			documentResponse: toDocument(l.Type, l.Document), URL: l.URL, ExpiresAt: l.ExpiresAt,
 		})
@@ -162,12 +162,26 @@ func (h *Handler) documentLinks(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, body)
 }
 
+// approveRequest names the version the Owner reviewed, so a document replaced meanwhile is never approved unseen.
+type approveRequest struct {
+	Version *int64 `json:"version"`
+}
+
 func (h *Handler) approve(w http.ResponseWriter, r *http.Request) {
-	renter, err := h.Renters.Approve(r.Context(), identity(r), r.PathValue("id"))
+	var req approveRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.Version == nil {
+		validationFailed(w, map[string]string{"version": "is required"})
+		return
+	}
+	renter, err := h.Renters.Approve(r.Context(), identity(r), r.PathValue("id"), *req.Version)
 	h.writeRenter(w, r, renter, err)
 }
 
 type rejectRequest struct {
+	Version   *int64   `json:"version"`
 	Reason    *string  `json:"reason"`
 	Documents []string `json:"documents"`
 }
@@ -177,15 +191,15 @@ func (h *Handler) reject(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.Reason == nil {
-		validationFailed(w, map[string]string{"reason": "is required"})
+	if missing := required(map[string]bool{"version": req.Version == nil, "reason": req.Reason == nil}); len(missing) > 0 {
+		validationFailed(w, missing)
 		return
 	}
 	redo := make([]domain.DocumentType, 0, len(req.Documents))
 	for _, d := range req.Documents {
 		redo = append(redo, domain.DocumentType(d))
 	}
-	renter, err := h.Renters.Reject(r.Context(), identity(r), r.PathValue("id"), *req.Reason, redo)
+	renter, err := h.Renters.Reject(r.Context(), identity(r), r.PathValue("id"), *req.Version, *req.Reason, redo)
 	h.writeRenter(w, r, renter, err)
 }
 
@@ -211,11 +225,13 @@ func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) 
 		httpx.WriteError(w, http.StatusConflict, httpx.Error{Code: "name_locked", Message: "the full name cannot change after verification"})
 	case errors.Is(err, domain.ErrNotPending):
 		httpx.WriteError(w, http.StatusConflict, httpx.Error{Code: "not_pending", Message: "only a verification waiting for review can be approved or rejected"})
+	case errors.Is(err, domain.ErrChanged):
+		httpx.WriteError(w, http.StatusConflict, httpx.Error{Code: "renter_changed", Message: "the renter changed since you reviewed them; review again"})
 	case errors.Is(err, service.ErrUploadNotFound):
 		httpx.WriteError(w, http.StatusBadRequest, httpx.Error{Code: "upload_not_found", Message: "no file was uploaded for this upload ID"})
 	case errors.Is(err, service.ErrFileTooLarge):
 		httpx.WriteError(w, http.StatusBadRequest, httpx.Error{Code: "file_too_large", Message: "the uploaded file is larger than 10 MiB"})
-	case errors.Is(err, service.ErrUnsupportedType):
+	case errors.Is(err, service.ErrUnsupportedFile):
 		httpx.WriteError(w, http.StatusBadRequest, httpx.Error{Code: "unsupported_file_type", Message: "the uploaded file must be a JPEG, PNG or WebP image"})
 	case errors.Is(err, service.ErrBusy):
 		httpx.WriteError(w, http.StatusServiceUnavailable, httpx.Error{Code: "busy", Message: err.Error()})

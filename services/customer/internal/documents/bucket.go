@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -37,13 +39,13 @@ type Link struct {
 	ExpiresAt time.Time
 }
 
-// UploadLink lets a browser PUT one file of contentType to key, and nothing else.
-func (b *Bucket) UploadLink(ctx context.Context, key, contentType string) (Link, error) {
-	req, err := b.Presign.PresignPutObject(ctx, &s3.PutObjectInput{Bucket: &b.Name, Key: &key, ContentType: &contentType}, s3.WithPresignExpires(b.UploadTTL))
+// UploadLink lets a browser PUT one file of contentType and exactly size bytes to key, and nothing else.
+func (b *Bucket) UploadLink(ctx context.Context, key, contentType string, size int64) (Link, error) {
+	req, err := b.Presign.PresignPutObject(ctx, &s3.PutObjectInput{Bucket: &b.Name, Key: &key, ContentType: &contentType, ContentLength: &size}, s3.WithPresignExpires(b.UploadTTL))
 	if err != nil {
 		return Link{}, fmt.Errorf("presign upload: %w", err)
 	}
-	// Content-Type is signed, so the browser must send exactly this value.
+	// Content-Type is signed, so the browser must send exactly this value; it sets Content-Length itself.
 	return Link{URL: req.URL, Headers: map[string]string{"Content-Type": contentType}, ExpiresAt: time.Now().Add(b.UploadTTL).UTC()}, nil
 }
 
@@ -71,10 +73,19 @@ func (b *Bucket) Head(ctx context.Context, key string) (Object, error) {
 
 // Copy duplicates an object within the bucket, keeping its content type.
 func (b *Bucket) Copy(ctx context.Context, from, to string) error {
-	if _, err := b.S3.CopyObject(ctx, &s3.CopyObjectInput{Bucket: &b.Name, Key: &to, CopySource: aws.String(b.Name + "/" + from)}); err != nil {
+	if _, err := b.S3.CopyObject(ctx, &s3.CopyObjectInput{Bucket: &b.Name, Key: &to, CopySource: aws.String(b.Name + "/" + escapeKey(from))}); err != nil {
 		return fmt.Errorf("copy %s: %w", from, err)
 	}
 	return nil
+}
+
+// escapeKey URL-encodes each segment of a key, as CopySource requires.
+func escapeKey(key string) string {
+	parts := strings.Split(key, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return strings.Join(parts, "/")
 }
 
 // Delete removes key; deleting a missing key is not an error.

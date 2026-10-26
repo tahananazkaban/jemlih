@@ -38,6 +38,7 @@ type renter struct {
 		Documents []string `json:"documents"`
 	} `json:"rejection"`
 	VerifiedAt *time.Time `json:"verified_at"`
+	Version    int64      `json:"version"`
 }
 
 type upload struct {
@@ -98,13 +99,29 @@ func (r *rental) me(token string) renter {
 // upload sends content straight to the bucket through a presigned URL and returns the upload ID.
 func (r *rental) upload(token, docType, contentType string, content []byte) string {
 	r.t.Helper()
-	var u upload
-	r.as(token).Do(http.MethodPost, "/renters/me/documents/"+docType+"/uploads", map[string]string{"content_type": contentType}).
-		Expect(http.StatusCreated).Decode(&u)
+	u := r.startUpload(token, docType, contentType, len(content))
 	if status := testkit.PutFile(r.t, u.URL, u.Headers, content); status != http.StatusOK {
 		r.t.Fatalf("upload to bucket: status %d", status)
 	}
 	return u.UploadID
+}
+
+func (r *rental) startUpload(token, docType, contentType string, size int) upload {
+	r.t.Helper()
+	var u upload
+	r.as(token).Do(http.MethodPost, "/renters/me/documents/"+docType+"/uploads", map[string]any{"content_type": contentType, "size": size}).
+		Expect(http.StatusCreated).Decode(&u)
+	return u
+}
+
+func (r *rental) approve(token, id string, version int64) *testkit.Response {
+	r.t.Helper()
+	return r.as(token).Do(http.MethodPost, "/renters/"+id+"/approve", map[string]int64{"version": version})
+}
+
+func (r *rental) reject(token, id string, version int64, reason string, documents ...string) *testkit.Response {
+	r.t.Helper()
+	return r.as(token).Do(http.MethodPost, "/renters/"+id+"/reject", map[string]any{"version": version, "reason": reason, "documents": documents})
 }
 
 func (r *rental) attach(token, docType, uploadID string) *testkit.Response {
@@ -192,12 +209,13 @@ func TestDocumentsUploadStraightToTheBucket(t *testing.T) {
 	r := newRental(t, 0)
 	token := r.newRenter()
 
-	var u upload
-	r.as(token).Do(http.MethodPost, "/renters/me/documents/id_card/uploads", map[string]string{"content_type": "image/png"}).
-		Expect(http.StatusCreated).Decode(&u)
+	u := r.startUpload(token, "id_card", "image/png", len(photo("id card")))
 	bucket := env.String("DOCUMENT_BUCKET", "jemlih-customer-documents")
 	if parsed, err := url.Parse(u.URL); err != nil || !strings.HasPrefix(parsed.Path, "/"+bucket+"/") || parsed.Query().Get("X-Amz-Signature") == "" {
 		t.Errorf("upload URL %s is not a presigned URL into %s", u.URL, bucket)
+	}
+	if signed := strings.Split(mustQuery(t, u.URL).Get("X-Amz-SignedHeaders"), ";"); !slices.Contains(signed, "content-length") || !slices.Contains(signed, "content-type") {
+		t.Errorf("signed headers = %v, want the size and type pinned", signed)
 	}
 	if u.Method != http.MethodPut || u.Headers["Content-Type"] != "image/png" || u.MaxSize != 10<<20 {
 		t.Errorf("upload = %+v", u)
@@ -221,6 +239,15 @@ func TestDocumentsUploadStraightToTheBucket(t *testing.T) {
 	r.attach(token, "id_card", u.UploadID).Expect(http.StatusBadRequest)
 }
 
+func mustQuery(t *testing.T, raw string) url.Values {
+	t.Helper()
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed.Query()
+}
+
 func TestUploadsAreChecked(t *testing.T) {
 	r := newRental(t, 0)
 	token := r.newRenter()
@@ -235,17 +262,20 @@ func TestUploadsAreChecked(t *testing.T) {
 	}
 
 	t.Run("unsupported content type", func(t *testing.T) {
-		expectError(t, r.as(token).Do(http.MethodPost, "/renters/me/documents/selfie/uploads", map[string]string{"content_type": "application/pdf"}), http.StatusBadRequest, "validation_failed")
+		expectError(t, r.as(token).Do(http.MethodPost, "/renters/me/documents/selfie/uploads", map[string]any{"content_type": "application/pdf", "size": 100}), http.StatusBadRequest, "validation_failed")
+	})
+	t.Run("announced too large", func(t *testing.T) {
+		expectError(t, r.as(token).Do(http.MethodPost, "/renters/me/documents/selfie/uploads", map[string]any{"content_type": "image/jpeg", "size": 10<<20 + 1}), http.StatusBadRequest, "validation_failed")
+		expectError(t, r.as(token).Do(http.MethodPost, "/renters/me/documents/selfie/uploads", map[string]any{"content_type": "image/jpeg", "size": 0}), http.StatusBadRequest, "validation_failed")
 	})
 	t.Run("unknown document type", func(t *testing.T) {
-		expectError(t, r.as(token).Do(http.MethodPost, "/renters/me/documents/passport/uploads", map[string]string{"content_type": "image/jpeg"}), http.StatusNotFound, "unknown_document_type")
+		expectError(t, r.as(token).Do(http.MethodPost, "/renters/me/documents/passport/uploads", map[string]any{"content_type": "image/jpeg", "size": 100}), http.StatusNotFound, "unknown_document_type")
 	})
 	t.Run("not an upload ID", func(t *testing.T) {
 		expectError(t, r.attach(token, "selfie", "../../other-renter/selfie"), http.StatusBadRequest, "validation_failed")
 	})
 	t.Run("never uploaded", func(t *testing.T) {
-		var u upload
-		r.as(token).Do(http.MethodPost, "/renters/me/documents/selfie/uploads", map[string]string{"content_type": "image/jpeg"}).Expect(http.StatusCreated).Decode(&u)
+		u := r.startUpload(token, "selfie", "image/jpeg", 100)
 		expectError(t, r.attach(token, "selfie", u.UploadID), http.StatusBadRequest, "upload_not_found")
 	})
 	t.Run("uploaded for another type", func(t *testing.T) {
@@ -256,14 +286,15 @@ func TestUploadsAreChecked(t *testing.T) {
 		id := r.upload(r.newRenter(), "selfie", "image/jpeg", photo("their selfie"))
 		expectError(t, r.attach(token, "selfie", id), http.StatusBadRequest, "upload_not_found")
 	})
-	t.Run("too large", func(t *testing.T) {
-		id := r.upload(token, "selfie", "image/jpeg", bytes.Repeat([]byte{0xff}, 10<<20+1))
-		expectError(t, r.attach(token, "selfie", id), http.StatusBadRequest, "file_too_large")
+	t.Run("larger than announced", func(t *testing.T) {
+		// Real S3 refuses a body longer than the signed size; the emulator does not, so attaching checks again.
+		u := r.startUpload(token, "selfie", "image/jpeg", 100)
+		testkit.PutFile(t, u.URL, u.Headers, bytes.Repeat([]byte{0xff}, 10<<20+1))
+		expectError(t, r.attach(token, "selfie", u.UploadID), http.StatusBadRequest, "file_too_large")
 	})
 	t.Run("stored as another content type", func(t *testing.T) {
 		// Real S3 refuses a Content-Type the URL was not signed for; the emulator does not, so attaching checks again.
-		var u upload
-		r.as(token).Do(http.MethodPost, "/renters/me/documents/selfie/uploads", map[string]string{"content_type": "image/jpeg"}).Expect(http.StatusCreated).Decode(&u)
+		u := r.startUpload(token, "selfie", "image/jpeg", 8)
 		testkit.PutFile(t, u.URL, map[string]string{"Content-Type": "text/html"}, []byte("<script>"))
 		expectError(t, r.attach(token, "selfie", u.UploadID), http.StatusBadRequest, "unsupported_file_type")
 	})
@@ -330,6 +361,11 @@ func TestOnlyOwnersReadDocuments(t *testing.T) {
 		}
 	}
 
+	var links2 struct{ Version int64 }
+	r.as(r.owner).Do(http.MethodGet, "/renters/"+me.ID+"/documents", nil).Decode(&links2)
+	if links2.Version != me.Version {
+		t.Errorf("links version = %d, want %d", links2.Version, me.Version)
+	}
 	r.as(r.staff).Do(http.MethodGet, "/renters/"+me.ID+"/documents", nil).Expect(http.StatusForbidden)
 	r.as(token).Do(http.MethodGet, "/renters/"+me.ID+"/documents", nil).Expect(http.StatusForbidden)
 	r.as(token).Do(http.MethodGet, "/renters/"+me.ID, nil).Expect(http.StatusForbidden)
@@ -362,7 +398,7 @@ func TestApprovedRenterStaysVerified(t *testing.T) {
 	token, me := r.pendingRenter()
 
 	var got renter
-	r.as(r.owner).Do(http.MethodPost, "/renters/"+me.ID+"/approve", nil).Expect(http.StatusOK).Decode(&got)
+	r.approve(r.owner, me.ID, me.Version).Expect(http.StatusOK).Decode(&got)
 	if got.Status != "verified" || got.VerifiedAt == nil {
 		t.Fatalf("approved renter = %+v", got)
 	}
@@ -371,7 +407,7 @@ func TestApprovedRenterStaysVerified(t *testing.T) {
 	}
 
 	var e testkit.ErrorBody
-	r.as(token).Do(http.MethodPost, "/renters/me/documents/selfie/uploads", map[string]string{"content_type": "image/jpeg"}).Expect(http.StatusConflict).Decode(&e)
+	r.as(token).Do(http.MethodPost, "/renters/me/documents/selfie/uploads", map[string]any{"content_type": "image/jpeg", "size": 100}).Expect(http.StatusConflict).Decode(&e)
 	if e.Error.Code != "already_verified" {
 		t.Errorf("new upload code = %s", e.Error.Code)
 	}
@@ -383,7 +419,7 @@ func TestApprovedRenterStaysVerified(t *testing.T) {
 	if got.Status != "verified" || got.PhoneNumber != "+6285700001111" {
 		t.Errorf("after phone change = %+v", got)
 	}
-	r.as(r.owner).Do(http.MethodPost, "/renters/"+me.ID+"/approve", nil).Expect(http.StatusConflict).Decode(&e)
+	r.approve(r.owner, me.ID, got.Version).Expect(http.StatusConflict).Decode(&e)
 	if e.Error.Code != "not_pending" {
 		t.Errorf("second approval code = %s", e.Error.Code)
 	}
@@ -394,8 +430,7 @@ func TestRejectedRenterUploadsAgain(t *testing.T) {
 	token, me := r.pendingRenter()
 
 	var got renter
-	r.as(r.owner).Do(http.MethodPost, "/renters/"+me.ID+"/reject", map[string]any{"reason": "Selfie is blurry", "documents": []string{"selfie"}}).
-		Expect(http.StatusOK).Decode(&got)
+	r.reject(r.owner, me.ID, me.Version, "Selfie is blurry", "selfie").Expect(http.StatusOK).Decode(&got)
 	if got.Status != "rejected" || got.Rejection == nil || got.Rejection.Reason != "Selfie is blurry" || !slices.Equal(got.Rejection.Documents, []string{"selfie"}) {
 		t.Fatalf("rejected renter = %+v", got)
 	}
@@ -417,15 +452,43 @@ func TestRejectedRenterUploadsAgain(t *testing.T) {
 	if _, body := testkit.GetFile(t, links.Documents[2].URL); !bytes.Equal(body, sharper) {
 		t.Errorf("owner sees selfie %q, want the new one", body)
 	}
-	r.as(r.owner).Do(http.MethodPost, "/renters/"+me.ID+"/approve", nil).Expect(http.StatusOK)
+	r.approve(r.owner, me.ID, got.Version).Expect(http.StatusOK)
+}
+
+func TestOwnersOnlyApproveWhatTheyReviewed(t *testing.T) {
+	r := newRental(t, 0)
+	token, me := r.pendingRenter()
+
+	var links struct{ Version int64 }
+	r.as(r.owner).Do(http.MethodGet, "/renters/"+me.ID+"/documents", nil).Expect(http.StatusOK).Decode(&links)
+	replaced := r.uploadDocument(token, "selfie", []byte("\xff\xd8\xff a selfie the owner never opened"))
+
+	for name, resp := range map[string]*testkit.Response{
+		"approve": r.approve(r.owner, me.ID, links.Version),
+		"reject":  r.reject(r.owner, me.ID, links.Version, "Blurry", "selfie"),
+	} {
+		var e testkit.ErrorBody
+		resp.Expect(http.StatusConflict).Decode(&e)
+		if e.Error.Code != "renter_changed" {
+			t.Errorf("%s with a stale version: code = %s", name, e.Error.Code)
+		}
+	}
+	if got := r.me(token); got.Status != "pending" {
+		t.Errorf("status = %s, want still pending", got.Status)
+	}
+	r.approve(r.owner, me.ID, replaced.Version).Expect(http.StatusOK)
 }
 
 func TestRejectionWithoutDocumentsWaitsForAProfileFix(t *testing.T) {
 	r := newRental(t, 0)
 	token, me := r.pendingRenter()
 
-	r.as(r.owner).Do(http.MethodPost, "/renters/"+me.ID+"/reject", map[string]any{"reason": "Name does not match the ID card"}).Expect(http.StatusOK)
+	r.reject(r.owner, me.ID, me.Version, "Name does not match the ID card").Expect(http.StatusOK)
 	var got renter
+	r.saveProfile(token, "Wayan Sudarsana", "081234567890").Expect(http.StatusOK).Decode(&got)
+	if got.Status != "rejected" {
+		t.Errorf("status after saving an unchanged profile = %s, want rejected", got.Status)
+	}
 	r.saveProfile(token, "I Wayan Sudarsana", "081234567890").Expect(http.StatusOK).Decode(&got)
 	if got.Status != "pending" {
 		t.Errorf("status after fixing the name = %s, want pending", got.Status)
@@ -439,15 +502,17 @@ func TestReviewNeedsAPendingRenterAndAReason(t *testing.T) {
 	r.saveProfile(unfinished, "Ketut Arya", "081234567890").Expect(http.StatusOK)
 	unfinishedID := r.me(unfinished).ID
 
-	r.as(r.owner).Do(http.MethodPost, "/renters/"+unfinishedID+"/approve", nil).Expect(http.StatusConflict)
-	r.as(r.owner).Do(http.MethodPost, "/renters/"+unfinishedID+"/reject", map[string]string{"reason": "Incomplete"}).Expect(http.StatusConflict)
+	r.approve(r.owner, unfinishedID, r.me(unfinished).Version).Expect(http.StatusConflict)
+	r.reject(r.owner, unfinishedID, r.me(unfinished).Version, "Incomplete").Expect(http.StatusConflict)
 
+	v := pending.Version
 	for name, body := range map[string]any{
-		"no reason":      map[string]any{"documents": []string{"selfie"}},
-		"blank reason":   map[string]any{"reason": "   "},
-		"long reason":    map[string]any{"reason": strings.Repeat("x", 501)},
-		"unknown type":   map[string]any{"reason": "Blurry", "documents": []string{"passport"}},
-		"documents type": `{"reason":"Blurry","documents":"selfie"}`,
+		"no reason":      map[string]any{"version": v, "documents": []string{"selfie"}},
+		"no version":     map[string]any{"reason": "Blurry"},
+		"blank reason":   map[string]any{"version": v, "reason": "   "},
+		"long reason":    map[string]any{"version": v, "reason": strings.Repeat("x", 501)},
+		"unknown type":   map[string]any{"version": v, "reason": "Blurry", "documents": []string{"passport"}},
+		"documents type": fmt.Sprintf(`{"version":%d,"reason":"Blurry","documents":"selfie"}`, v),
 	} {
 		t.Run(name, func(t *testing.T) {
 			r.as(r.owner).Do(http.MethodPost, "/renters/"+pending.ID+"/reject", body).Expect(http.StatusBadRequest)
@@ -483,7 +548,7 @@ func TestRolesAndRentals(t *testing.T) {
 		"other rental lists no renter": {other.owner, http.MethodGet, "/renters", http.StatusOK},
 	} {
 		t.Run(name, func(t *testing.T) {
-			resp := r.as(tc.token).Do(tc.method, tc.path, nil).Expect(tc.status)
+			resp := r.as(tc.token).Do(tc.method, tc.path, map[string]int64{"version": me.Version}).Expect(tc.status)
 			if tc.status == http.StatusOK && !bytes.Equal(bytes.TrimSpace(resp.Body), []byte(`{"renters":[]}`)) {
 				t.Errorf("body = %s", resp.Body)
 			}

@@ -66,11 +66,16 @@ paths:
           application/json:
             schema:
               type: object
-              required: [content_type]
+              required: [content_type, size]
               properties:
                 content_type:
                   type: string
                   enum: [image/jpeg, image/png, image/webp]
+                size:
+                  type: integer
+                  minimum: 1
+                  maximum: 10485760
+                  description: Exact file size in bytes; the URL is signed for it, so a different size is refused.
       responses:
         "201":
           description: Send the file with `method` to `url`, with exactly `headers`, before `expires_at`.
@@ -168,8 +173,11 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [documents]
+                required: [version, documents]
                 properties:
+                  version:
+                    type: integer
+                    description: The Renter's version these links show; send it when approving or rejecting.
                   documents:
                     type: array
                     items: { $ref: "#/components/schemas/DocumentLink" }
@@ -182,6 +190,15 @@ paths:
       summary: Verify a pending Renter and publish RenterVerified (Owner only)
       parameters:
         - $ref: "#/components/parameters/RenterID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version: { $ref: "#/components/schemas/ReviewedVersion" }
       responses:
         "200":
           description: The Renter is verified for every later Booking.
@@ -205,8 +222,9 @@ paths:
           application/json:
             schema:
               type: object
-              required: [reason]
+              required: [version, reason]
               properties:
+                version: { $ref: "#/components/schemas/ReviewedVersion" }
                 reason: { type: string, minLength: 1, maxLength: 500 }
                 documents:
                   type: array
@@ -247,6 +265,11 @@ components:
       schema:
         type: string
   schemas:
+    ReviewedVersion:
+      type: integer
+      description: >-
+        The Renter's version the Owner reviewed, from the document links or the Renter.
+        If the Renter changed since, the decision is refused with `renter_changed` so nothing is approved unseen.
     DocumentType:
       type: string
       enum: [id_card, driving_licence, selfie]
@@ -323,6 +346,7 @@ components:
         status_changed_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+        version: { type: integer, description: Increases with every saved change; 0 until first saved. }
     ErrorBody:
       type: object
       required: [error]
@@ -343,6 +367,7 @@ components:
                 - already_verified
                 - name_locked
                 - not_pending
+                - renter_changed
                 - not_found
                 - busy
                 - unauthenticated
@@ -374,7 +399,7 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorBody" }
     NotPending:
-      description: The Renter is not waiting for review (`not_pending`).
+      description: The Renter is not waiting for review (`not_pending`), or changed since the reviewed version (`renter_changed`).
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorBody" }

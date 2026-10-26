@@ -30,6 +30,15 @@ func ParseDocumentType(s string) (DocumentType, bool) {
 	return t, slices.Contains(DocumentTypes, t)
 }
 
+// Names turns document types into their wire names, keeping the order.
+func Names(types []DocumentType) []string {
+	names := make([]string, 0, len(types))
+	for _, t := range types {
+		names = append(names, string(t))
+	}
+	return names
+}
+
 // Status is where a Renter is in verification.
 type Status string
 
@@ -39,6 +48,12 @@ const (
 	StatusVerified   Status = "verified"
 	StatusRejected   Status = "rejected"
 )
+
+// ParseStatus accepts only the known verification statuses.
+func ParseStatus(s string) (Status, bool) {
+	st := Status(s)
+	return st, slices.Contains([]Status{StatusUnverified, StatusPending, StatusVerified, StatusRejected}, st)
+}
 
 // MaxDocumentSize bounds an uploaded photo; phone camera pictures stay well below it.
 const MaxDocumentSize = 10 << 20
@@ -60,6 +75,7 @@ var (
 	ErrAlreadyVerified = errors.New("renter is already verified")
 	ErrNotPending      = errors.New("verification is not waiting for review")
 	ErrNameLocked      = errors.New("full name cannot change after verification")
+	ErrChanged         = errors.New("renter changed since it was reviewed")
 )
 
 // ValidationError maps each invalid field to a human-readable reason.
@@ -142,9 +158,13 @@ func (r Renter) UpdateProfile(fullName, phone string, now time.Time) (Renter, er
 		return Renter{}, ErrNameLocked
 	}
 	next := r.clone()
+	changed := name != r.FullName || number != r.PhoneNumber
 	next.FullName, next.PhoneNumber = name, number
 	next.touch(now)
-	next.submitIfReady(now)
+	// Saving an unchanged profile must not send a rejected Renter back to review.
+	if changed || next.Status != StatusRejected {
+		next.submitIfReady(now)
+	}
 	return next, nil
 }
 
@@ -164,10 +184,13 @@ func (r Renter) PutDocument(t DocumentType, d Document, now time.Time) (Renter, 
 	return next, replaced, nil
 }
 
-// Approve verifies a Renter waiting for review.
-func (r Renter) Approve(by string, now time.Time) (Renter, error) {
+// Approve verifies a Renter waiting for review, exactly as the Owner saw them at reviewed.
+func (r Renter) Approve(by string, reviewed int64, now time.Time) (Renter, error) {
 	if r.Status != StatusPending {
 		return Renter{}, ErrNotPending
+	}
+	if r.Version != reviewed {
+		return Renter{}, ErrChanged
 	}
 	next := r.clone()
 	next.VerifiedBy, next.VerifiedAt = by, now.UTC()
@@ -177,7 +200,7 @@ func (r Renter) Approve(by string, now time.Time) (Renter, error) {
 }
 
 // Reject sends a Renter waiting for review back with a reason and the documents to upload again.
-func (r Renter) Reject(by, reason string, documents []DocumentType, now time.Time) (Renter, error) {
+func (r Renter) Reject(by string, reviewed int64, reason string, documents []DocumentType, now time.Time) (Renter, error) {
 	fields := map[string]string{}
 	reason = strings.TrimSpace(reason)
 	switch {
@@ -202,6 +225,9 @@ func (r Renter) Reject(by, reason string, documents []DocumentType, now time.Tim
 	}
 	if r.Status != StatusPending {
 		return Renter{}, ErrNotPending
+	}
+	if r.Version != reviewed {
+		return Renter{}, ErrChanged
 	}
 	next := r.clone()
 	next.Rejection = &Rejection{Reason: reason, Documents: redo, By: by, At: now.UTC()}

@@ -118,7 +118,7 @@ func lostRace(err error) bool {
 	if errors.As(err, &canceled) {
 		for i, reason := range canceled.CancellationReasons {
 			switch code := aws.ToString(reason.Code); {
-			case code == "TransactionConflict", code == "ThrottlingError":
+			case code == "TransactionConflict", code == "ThrottlingError", code == "ProvisionedThroughputExceeded":
 				return true
 			case i == 0 && code == "ConditionalCheckFailed":
 				return true
@@ -192,10 +192,7 @@ func toItem(rentalID string, r domain.Renter) renterItem {
 		item.Documents[string(t)] = documentItem{Key: d.Key, ContentType: d.ContentType, Size: d.Size, UploadedAt: formatTime(d.UploadedAt)}
 	}
 	if rej := r.Rejection; rej != nil {
-		item.Rejection = &rejectionItem{Reason: rej.Reason, Documents: []string{}, By: rej.By, At: formatTime(rej.At)}
-		for _, t := range rej.Documents {
-			item.Rejection.Documents = append(item.Rejection.Documents, string(t))
-		}
+		item.Rejection = &rejectionItem{Reason: rej.Reason, Documents: domain.Names(rej.Documents), By: rej.By, At: formatTime(rej.At)}
 	}
 	return item
 }

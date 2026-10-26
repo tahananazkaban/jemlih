@@ -89,5 +89,20 @@ services:
       fleet:
         condition: service_healthy
 
+  customer:
+    <<: *service
+    build:
+      context: .
+      args:
+        SERVICE: customer
+    ports:
+      - "${CUSTOMER_PORT:-8084}:8080"
+    environment:
+      <<: *service-env
+      CUSTOMER_TABLE: ${CUSTOMER_TABLE:-jemlih-customer}
+      DOCUMENT_BUCKET: ${DOCUMENT_BUCKET:-jemlih-customer-documents}
+      # Presigned URLs are opened by browsers on the host, not by containers
+      DOCUMENT_PUBLIC_ENDPOINT: http://localhost:${FLOCI_PORT:-4566}
+
 volumes:
   floci-data:

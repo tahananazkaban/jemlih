@@ -34,6 +34,24 @@ variable "booking_table" {
   default     = "jemlih-booking"
 }
 
+variable "customer_table" {
+  description = "Name of the customer DynamoDB table; must match CUSTOMER_TABLE of the service."
+  type        = string
+  default     = "jemlih-customer"
+}
+
+variable "document_bucket" {
+  description = "Name of the private identity document bucket; must match DOCUMENT_BUCKET of the service."
+  type        = string
+  default     = "jemlih-customer-documents"
+}
+
+variable "web_origins" {
+  description = "Origins of the web app, allowed to upload to and read from the document bucket."
+  type        = list(string)
+  default     = ["http://localhost:3000"]
+}
+
 variable "event_bus_name" {
   description = "Name of the custom EventBridge bus; must match EVENT_BUS_NAME of the tests."
   type        = string

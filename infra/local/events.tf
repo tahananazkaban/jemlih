@@ -103,8 +103,9 @@ resource "aws_cloudwatch_event_target" "archive_all" {
 # Relay from service table streams to the bus; one function, one mapping per table.
 locals {
   outbox_streams = {
-    fleet   = aws_dynamodb_table.fleet.stream_arn
-    booking = aws_dynamodb_table.booking.stream_arn
+    fleet    = aws_dynamodb_table.fleet.stream_arn
+    booking  = aws_dynamodb_table.booking.stream_arn
+    customer = aws_dynamodb_table.customer.stream_arn
   }
 }
 

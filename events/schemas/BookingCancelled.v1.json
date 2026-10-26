@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "BookingCancelled.v1.json",
+  "title": "BookingCancelled v1",
+  "description": "A held Booking was cancelled and its Unit released. Published by booking.",
+  "type": "object",
+  "required": ["booking_id", "unit_id", "renter_id", "cancelled_by", "reason"],
+  "properties": {
+    "booking_id": { "type": "string", "minLength": 1 },
+    "unit_id": { "type": "string", "minLength": 1 },
+    "renter_id": { "type": "string", "minLength": 1 },
+    "cancelled_by": { "enum": ["renter", "owner", "system"] },
+    "reason": { "type": "string", "description": "Empty when a Renter cancels without one." }
+  }
+}

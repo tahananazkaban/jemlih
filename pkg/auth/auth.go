@@ -125,8 +125,8 @@ func MustFromContext(ctx context.Context) Identity {
 func (v *Verifier) Require(roles ...Role) func(http.HandlerFunc) http.Handler {
 	return func(next http.HandlerFunc) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if !ok || token == "" {
+			token := BearerToken(r)
+			if token == "" {
 				unauthorized(w)
 				return
 			}
@@ -146,6 +146,15 @@ func (v *Verifier) Require(roles ...Role) func(http.HandlerFunc) http.Handler {
 			next(w, r.WithContext(context.WithValue(r.Context(), contextKey{}, id)))
 		})
 	}
+}
+
+// BearerToken returns the request's bearer credentials, or "" when there are none.
+func BearerToken(r *http.Request) string {
+	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok {
+		return ""
+	}
+	return token
 }
 
 func unauthorized(w http.ResponseWriter) {

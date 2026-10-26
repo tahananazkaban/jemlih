@@ -70,5 +70,24 @@ services:
       <<: *service-env
       COGNITO_USER_POOL_ID: ${COGNITO_USER_POOL_ID:-unset}
 
+  booking:
+    <<: *service
+    build:
+      context: .
+      args:
+        SERVICE: booking
+    ports:
+      - "${BOOKING_PORT:-8083}:8080"
+    environment:
+      <<: *service-env
+      BOOKING_TABLE: ${BOOKING_TABLE:-jemlih-booking}
+      BOOKING_HOLD: ${BOOKING_HOLD:-2h}
+      FLEET_URL: http://fleet:8080
+    depends_on:
+      floci:
+        condition: service_healthy
+      fleet:
+        condition: service_healthy
+
 volumes:
   floci-data:

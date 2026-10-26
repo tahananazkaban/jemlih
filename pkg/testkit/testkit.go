@@ -7,12 +7,14 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,11 +63,18 @@ func NewRentalID() string {
 	return "test-" + hex.EncodeToString(b)
 }
 
-// Client sends JSON requests to a service started in-process.
+// Client sends JSON requests to a service started in-process or already running.
 type Client struct {
-	t     testing.TB
-	srv   *httptest.Server
-	token string
+	t       testing.TB
+	baseURL string
+	http    *http.Client
+	token   string
+}
+
+// Remote returns a client for a service that is already running at baseURL, such as a compose container.
+func Remote(t testing.TB, baseURL string) *Client {
+	t.Helper()
+	return &Client{t: t, baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: 10 * time.Second}}
 }
 
 // As returns a client that sends token as its Bearer credentials.
@@ -80,7 +89,7 @@ func Serve(t testing.TB, handler http.Handler) *Client {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	return &Client{t: t, srv: srv}
+	return &Client{t: t, baseURL: srv.URL, http: srv.Client()}
 }
 
 // Response is a fully read HTTP response.
@@ -94,6 +103,15 @@ type Response struct {
 // Do sends body as JSON (a string is sent verbatim) and reads the whole response.
 func (c *Client) Do(method, path string, body any) *Response {
 	c.t.Helper()
+	resp, err := c.Send(method, path, body)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	return resp
+}
+
+// Send is Do without failing the test, so it is safe to call from other goroutines.
+func (c *Client) Send(method, path string, body any) (*Response, error) {
 	var reader io.Reader
 	switch b := body.(type) {
 	case nil:
@@ -102,28 +120,28 @@ func (c *Client) Do(method, path string, body any) *Response {
 	default:
 		raw, err := json.Marshal(b)
 		if err != nil {
-			c.t.Fatalf("marshal request: %v", err)
+			return nil, fmt.Errorf("marshal request: %w", err)
 		}
 		reader = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequest(method, c.srv.URL+path, reader)
+	req, err := http.NewRequest(method, c.baseURL+path, reader)
 	if err != nil {
-		c.t.Fatalf("build request: %v", err)
+		return nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
-	resp, err := c.srv.Client().Do(req)
+	resp, err := c.http.Do(req)
 	if err != nil {
-		c.t.Fatalf("%s %s: %v", method, path, err)
+		return nil, fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		c.t.Fatalf("read response: %v", err)
+		return nil, fmt.Errorf("read response: %w", err)
 	}
-	return &Response{t: c.t, Status: resp.StatusCode, Header: resp.Header, Body: raw}
+	return &Response{t: c.t, Status: resp.StatusCode, Header: resp.Header, Body: raw}, nil
 }
 
 // Expect fails the test unless the status matches, showing the body for context.
